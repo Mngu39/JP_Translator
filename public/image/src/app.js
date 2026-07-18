@@ -136,7 +136,7 @@ function rollbackQuota(k){
   localStorage.setItem(k,Math.max(0,n-1));
 }
 
-// ====== DB 로드: 텍스트번역기(Test-deepl-furigana) 우선, 실패 시 로컬 폴백 =====
+// ====== DB 로드: 통합 JP_Translator repo 내부 사전 파일 사용 =====
 async function fetchFirstJson(urls){
   for(const url of urls){
     try{
@@ -218,10 +218,11 @@ function parseCrowdAnki(deck){
 }
 
 async function loadDBs(){
-  const base = "https://mngu39.github.io/Test-deepl-furigana";
+  // /JP_Translator/image/ 에서 /JP_Translator/text/ 내부의 공용 사전 파일을 읽는다.
+  // 기존 Test-deepl-furigana repo에는 더 이상 의존하지 않는다.
   const [j1, j2] = await Promise.all([
-    fetchFirstJson([`${base}/kanji_ko_attr_irreg.min.json`, "./kanji_ko_attr_irreg.min.json"]),
-    fetchFirstJson([`${base}/deck.json`, "./일본어_한자_암기박사/deck.json"]),
+    fetchFirstJson(["../text/kanji_ko_attr_irreg.min.json?v=20260719"]),
+    fetchFirstJson(["../text/deck.json?v=20260719"]),
   ]);
 
   if(j1) KANJI = j1 || {};
