@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JA OCR Overlay</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main id="stage">
+    <img id="img" alt="screenshot" crossorigin="anonymous" />
+    <div id="overlay"></div>
+    <div id="hint">이미지 불러오는 중…</div>
+
+        <!-- 메인 팝업 -->
+    <div id="pop" class="popover" hidden>
+      <div id="popBar" class="popbar">
+        <div class="popbar-left">
+          <button id="btnBack" class="pbtn" title="뒤로" aria-label="뒤로" disabled>‹</button>
+          <button id="btnFwd" class="pbtn" title="앞으로" aria-label="앞으로" disabled>›</button>
+        </div>
+        <div class="popbar-right">
+          <button id="btnGhost" class="pbtn" title="선택 모드" aria-label="선택 모드">◳</button>
+          <button id="btnEdit" class="pbtn" title="수정" aria-label="수정">✎</button>
+          <button id="btnClose" class="pbtn" title="닫기" aria-label="닫기">✕</button>
+        </div>
+      </div>
+
+      <div id="popBody" class="popbody">
+        <!-- 문장 번역 화면 -->
+        <div id="viewSentence" class="view view-sentence">
+          <div id="rubyLine" class="ruby-line">…</div>
+          <hr class="sep" />
+          <div id="transLine" class="trans-line">…</div>
+          <div class="save-row" aria-label="문장박스 저장">
+            <button id="btnSaveSentence" class="savebtn" title="최근 세션에 문장박스 저장" aria-label="최근 세션에 문장박스 저장">💾</button>
+            <button id="btnNewSaveSentence" class="savebtn" title="세션 선택/새 세션으로 문장박스 저장" aria-label="세션 선택 또는 새 세션으로 문장박스 저장">＋</button>
+          </div>
+        </div>
+
+        <!-- 형태소/한자 화면 (서브팝업 대신 메인팝업 전환) -->
+        <div id="viewToken" class="view view-token" hidden>
+          <div id="subHead" class="sub-head-row"></div>
+          <div id="kwrap" class="kwrap"></div>
+          <div id="kExplain" class="k-explain" style="display:none;"></div>
+          <div class="save-row" aria-label="한자박스 저장">
+            <button id="btnSaveToken" class="savebtn" title="최근 세션에 한자박스 저장" aria-label="최근 세션에 한자박스 저장">💾</button>
+            <button id="btnNewSaveToken" class="savebtn" title="세션 선택/새 세션으로 한자박스 저장" aria-label="세션 선택 또는 새 세션으로 한자박스 저장">＋</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+<!-- 수정 다이얼로그 -->
+    <dialog id="editDlg">
+      <form method="dialog" class="edit-form">
+        <label>원문 수정</label>
+        <textarea id="editInput" rows="4"></textarea>
+        <menu>
+          <button value="cancel" class="btn ghost">취소</button>
+          <button id="editOk" value="ok" class="btn">저장</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <!-- 학습로그 세션 선택/생성 다이얼로그 -->
+    <dialog id="sessionDlg">
+      <form method="dialog" class="session-form">
+        <label for="sessionUrlInput">세션 링크</label>
+        <input id="sessionUrlInput" class="session-input" type="url" placeholder="YouTube 링크를 붙여넣기" autocomplete="off" />
+        <div id="sessionHint" class="session-hint">링크가 기존 세션과 일치하면 아래에 후보가 표시됩니다.</div>
+        <div id="sessionCandidates" class="session-candidates"></div>
+        <menu>
+          <button value="cancel" class="btn ghost">취소</button>
+          <button id="sessionUseBtn" value="ok" class="btn">저장</button>
+        </menu>
+      </form>
+    </dialog>
+
+    </div>
+  </main>
+
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>

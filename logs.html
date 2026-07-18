@@ -1,0 +1,174 @@
+import {
+  getLogWorkerBase,
+  setLogWorkerBase,
+  getAppToken,
+  setAppToken,
+  recentSessions,
+  ensureLogConfig
+} from "./log.js";
+import { createStoredZip } from "./zip-store.js";
+
+const workerBase = document.getElementById("workerBase");
+const saveBase = document.getElementById("saveBase");
+const setToken = document.getElementById("setToken");
+const refresh = document.getElementById("refresh");
+const list = document.getElementById("list");
+const exportJson = document.getElementById("exportJson");
+const exportTsv = document.getElementById("exportTsv");
+const exportZip = document.getElementById("exportZip");
+const exportStatus = document.getElementById("exportStatus");
+
+function esc(s){
+  return String(s||"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function downloadBlob(blob, filename){
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  a.download=filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+
+function timestampName(){
+  const d=new Date();
+  const p=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+async function authFetch(path, opts={}){
+  const {base, appToken, logToken} = await ensureLogConfig();
+  const headers = appToken ? {"x-app-token":appToken} : {"x-log-token":logToken};
+  const r = await fetch(`${base}${path}`, { ...opts, headers:{...headers, ...(opts.headers||{})} });
+  if(!r.ok){
+    const detail=await r.text().catch(()=>"");
+    throw new Error(detail || `HTTP ${r.status}`);
+  }
+  return r;
+}
+
+async function api(path, opts={}){
+  return (await authFetch(path, opts)).json();
+}
+
+async function downloadAuthenticated(path, filename, mime){
+  const r=await authFetch(path);
+  const blob=await r.blob();
+  downloadBlob(blob.type ? blob : new Blob([blob],{type:mime}), filename);
+}
+
+async function buildExportZip(){
+  exportZip.disabled=true;
+  exportStatus.textContent="내보낼 데이터 준비 중…";
+  try{
+    const jsonResponse=await authFetch("/api/export/json");
+    const exportData=await jsonResponse.json();
+
+    exportStatus.textContent="Gemini 설명과 Anki TSV 생성 중…";
+    const tsvResponse=await authFetch("/api/export/anki.tsv?ai=1");
+    const tsv=await tsvResponse.text();
+
+    const uniqueMedia=new Map();
+    for(const item of exportData.items || []){
+      if(item.media_id && item.media_filename && !uniqueMedia.has(item.media_id)){
+        uniqueMedia.set(item.media_id, item.media_filename);
+      }
+    }
+
+    const entries=[
+      {name:"anki.tsv", data:tsv},
+      {name:"export.json", data:JSON.stringify(exportData,null,2)},
+      {name:"IMPORT_README.txt", data:[
+        "JP Translator Anki export",
+        "",
+        "1. media 폴더 안의 이미지 파일을 Anki의 collection.media 폴더로 복사합니다.",
+        "2. Anki에서 anki.tsv를 가져옵니다.",
+        "3. 첫 열(note_type)을 기준으로 문장카드/단어카드 노트 유형을 연결합니다.",
+        "4. 이미지가 보이는지 확인한 뒤 서버 기록을 정리합니다.",
+        "",
+        "이 ZIP에는 APP_TOKEN이 포함되지 않습니다."
+      ].join("\r\n")}
+    ];
+
+    let done=0;
+    for(const [mediaId, filename] of uniqueMedia){
+      exportStatus.textContent=`이미지 내려받는 중… ${done+1}/${uniqueMedia.size}`;
+      const r=await authFetch(`/api/media/${encodeURIComponent(mediaId)}`);
+      entries.push({name:`media/${filename}`, data:await r.blob()});
+      done+=1;
+    }
+
+    exportStatus.textContent="ZIP 파일 만드는 중…";
+    const zip=await createStoredZip(entries);
+    downloadBlob(zip, `JP_Translator_Anki_${timestampName()}.zip`);
+    exportStatus.textContent=`완료: 카드 ${(exportData.items||[]).length}개, 이미지 ${uniqueMedia.size}개`;
+  }catch(e){
+    console.error(e);
+    exportStatus.textContent=`오류: ${e.message || e}`;
+    alert(`ZIP export 실패: ${e.message || e}`);
+  }finally{
+    exportZip.disabled=false;
+  }
+}
+
+async function load(){
+  workerBase.value = getLogWorkerBase();
+  list.textContent = "불러오는 중…";
+  try{
+    const out = await recentSessions();
+    const sessions = out.sessions || [];
+    if(!sessions.length){ list.textContent = "저장된 세션이 없습니다."; return; }
+    list.innerHTML = sessions.map(s=>`
+      <section class="card" data-id="${esc(s.id)}">
+        <h3>${esc(s.title || s.session_key || s.id)}</h3>
+        <div class="meta">${esc(s.canonical_url || s.raw_url || "")}</div>
+        <div class="meta">last_used: ${esc(s.last_used_at || "")} / key: ${esc(s.session_key || "")}</div>
+        <div class="actions">
+          <button class="btn danger" data-act="delete">세션 삭제</button>
+        </div>
+      </section>`).join("");
+  }catch(e){
+    console.error(e);
+    list.textContent = `오류: ${e.message || e}`;
+  }
+}
+
+saveBase.addEventListener("click",()=>{ setLogWorkerBase(workerBase.value.trim()); load(); });
+setToken.addEventListener("click",()=>{
+  const tok = prompt("APP_TOKEN 입력", getAppToken() || "");
+  if(tok) setAppToken(tok.trim());
+  load();
+});
+refresh.addEventListener("click", load);
+
+exportJson.addEventListener("click",()=>downloadAuthenticated(
+  "/api/export/json",
+  `JP_Translator_${timestampName()}.json`,
+  "application/json"
+).catch(e=>alert(`JSON export 실패: ${e.message || e}`)));
+
+exportTsv.addEventListener("click",()=>downloadAuthenticated(
+  "/api/export/anki.tsv?ai=1",
+  `JP_Translator_Anki_${timestampName()}.tsv`,
+  "text/tab-separated-values"
+).catch(e=>alert(`Anki TSV export 실패: ${e.message || e}`)));
+
+exportZip.addEventListener("click", buildExportZip);
+
+list.addEventListener("click", async ev=>{
+  const btn = ev.target.closest("button[data-act]");
+  if(!btn) return;
+  const card = ev.target.closest(".card");
+  const id = card?.dataset.id;
+  if(!id) return;
+  if(btn.dataset.act === "delete"){
+    if(!confirm("이 세션과 연결된 저장 항목/이미지를 서버에서 삭제할까요? PC로 옮기기 전이면 복구하기 어렵습니다.")) return;
+    await api(`/api/sessions/${encodeURIComponent(id)}`, {method:"DELETE"});
+    await load();
+  }
+});
+
+load();
