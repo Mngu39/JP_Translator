@@ -13,7 +13,7 @@ import {
   resolveSession,
   saveItem,
   downscaleImageElement,
-} from "./log.js";
+} from "./log.js?v=20260719-v4";
 
 const stage     = document.getElementById("stage");
 const imgEl     = document.getElementById("img");

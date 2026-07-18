@@ -128,27 +128,74 @@ function blobToBase64(blob){
   });
 }
 
+async function blobImageSource(blob){
+  if("createImageBitmap" in globalThis){
+    try{
+      const bitmap = await createImageBitmap(blob);
+      return { source:bitmap, width:bitmap.width, height:bitmap.height, cleanup:()=>bitmap.close?.() };
+    }catch{ /* Safari fallback below */ }
+  }
+  const objectUrl = URL.createObjectURL(blob);
+  const image = new Image();
+  image.crossOrigin = "anonymous";
+  await new Promise((resolve,reject)=>{
+    image.onload=resolve;
+    image.onerror=()=>reject(new Error("이미지 디코딩 실패"));
+    image.src=objectUrl;
+  });
+  return {
+    source:image,
+    width:image.naturalWidth,
+    height:image.naturalHeight,
+    cleanup:()=>URL.revokeObjectURL(objectUrl)
+  };
+}
+
+async function canvasToWebp(source, width, height, quality){
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", { alpha:false });
+  if(!ctx) throw new Error("canvas context 생성 실패");
+  ctx.drawImage(source, 0, 0, width, height);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/webp", quality));
+  if(!blob) throw new Error("WebP 변환 실패");
+  return blob;
+}
+
 export async function downscaleImageElement(imgEl, {longEdge=1600, quality=0.78}={}){
-  if(!imgEl?.naturalWidth || !imgEl?.naturalHeight) return null;
-  const nw = imgEl.naturalWidth;
-  const nh = imgEl.naturalHeight;
-  const scale = Math.min(1, longEdge / Math.max(nw, nh));
-  const w = Math.max(1, Math.round(nw * scale));
-  const h = Math.max(1, Math.round(nh * scale));
+  if(!imgEl) return null;
+  const makeResult = async (source, nw, nh) => {
+    if(!nw || !nh) throw new Error("이미지 크기를 읽지 못했습니다.");
+    const scale = Math.min(1, longEdge / Math.max(nw, nh));
+    const w = Math.max(1, Math.round(nw * scale));
+    const h = Math.max(1, Math.round(nh * scale));
+    const blob = await canvasToWebp(source, w, h, quality);
+    return {
+      base64:await blobToBase64(blob),
+      mime:"image/webp",
+      width:w,
+      height:h,
+      size_bytes:blob.size,
+      downscaled:true
+    };
+  };
 
   try{
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d", { alpha:false });
-    ctx.drawImage(imgEl, 0, 0, w, h);
-
-    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/webp", quality));
-    if(!blob) throw new Error("canvas.toBlob failed");
-    const base64 = await blobToBase64(blob);
-    return { base64, mime:"image/webp", width:w, height:h, size_bytes:blob.size, downscaled:true };
-  }catch(e){
-    console.warn("downscale failed; fallback to server image copy", e);
-    return null;
+    return await makeResult(imgEl, imgEl.naturalWidth, imgEl.naturalHeight);
+  }catch(firstError){
+    try{
+      const src = imgEl.currentSrc || imgEl.src || "";
+      if(!src) throw firstError;
+      const response = await fetch(src, { mode:"cors", cache:"no-store" });
+      if(!response.ok) throw new Error(`이미지 재요청 실패: HTTP ${response.status}`);
+      const decoded = await blobImageSource(await response.blob());
+      try{ return await makeResult(decoded.source, decoded.width, decoded.height); }
+      finally{ decoded.cleanup(); }
+    }catch(secondError){
+      console.warn("downscale failed; fallback to server image copy", firstError, secondError);
+      return null;
+    }
   }
 }
+
