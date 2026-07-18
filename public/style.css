@@ -1,0 +1,495 @@
+:root{
+  --bg:#0b0b0c;
+  --ink:#e8e8ea;
+  --muted:#a9abb3;
+  --accent:#4da3ff;
+
+  --box:#4da3ff;
+  --box-active:#00d4ff;
+
+  --pop:#141417;
+  --border:#2a2a31;
+
+  --dock-bg:#2b2f3a;
+  --dock-fg:#fff;
+  --font-ja:"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic","YuGothic","Noto Sans JP","Noto Sans CJK JP","Meiryo",sans-serif;
+  --font-ko:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"Apple SD Gothic Neo","Noto Sans CJK KR","Malgun Gothic",sans-serif;
+}
+
+*{ box-sizing:border-box; }
+html,body{
+  margin:0;
+  height:100%;
+  background:var(--bg);
+  color:var(--ink);
+  font-family:var(--font-ko);
+}
+#stage{
+  position:relative;
+  width:100%;
+  min-height:100vh;
+  display:grid;
+  place-items:center;
+  padding:10px;
+}
+
+#img{
+  max-width:100%;
+  height:auto;
+  display:block;
+  border-radius:10px;
+  box-shadow:0 6px 30px rgba(0,0,0,.4);
+}
+#overlay{
+  position:absolute;
+  inset:0;
+  margin:auto;
+  pointer-events:auto;
+}
+#hint{
+  position:absolute;
+  left:0; right:0; bottom:18px;
+  text-align:center;
+  color:var(--muted);
+  font-size:14px;
+}
+
+/* ====== OCR 인식 박스 ====== */
+.box{
+  position:absolute;
+  border:2px solid var(--box);
+  border-radius:10px;
+  background:transparent;
+  cursor:pointer;
+}
+.box.selected{
+  border-color:var(--box-active);
+  box-shadow:0 0 0 2px rgba(0,212,255,.22) inset;
+  background:rgba(80,200,255,.10);
+}
+.box .ord{
+  position:absolute;
+  right:4px;
+  top:2px;
+  background:#50c8ff;
+  color:#002331;
+  font-weight:700;
+  padding:0 6px;
+  border-radius:10px;
+  font-size:12px;
+}
+
+/* ====== 메인 팝업 ====== */
+.popover{
+  position:absolute;
+  max-width:min(92vw, 900px);
+  background:var(--pop);
+  color:var(--ink);
+  border:1px solid var(--border);
+  border-radius:14px;
+  /* 내부 여백(상/하) 축소: 화면 가림 최소화 */
+  padding:6px 10px 8px;
+  box-shadow:0 12px 40px rgba(0,0,0,.5);
+  z-index:50;
+}
+
+.popbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  margin-bottom:3px;
+}
+.popbar-left,.popbar-right{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.pbtn{
+  height:28px;
+  min-width:44px;
+  padding:0 12px;
+  border-radius:10px;
+  background:#2b2f3a;
+  color:#fff;
+  border:1px solid #3a3f4a;
+  font-size:14px;
+  font-weight:700;
+  line-height:28px;
+  text-align:center;
+  cursor:pointer;
+  user-select:none;
+}
+.pbtn:active{ filter:brightness(1.15); }
+.pbtn:disabled{ opacity:.35; cursor:default; }
+
+.view-token{
+  max-height:min(52vh, 520px);
+  overflow:auto;
+}
+
+/* 선택 모드(투명화/가리기): 본문/배경/앞뒤버튼은 숨기되(공간 유지), 버튼 3개는 제자리 고정 */
+.popover.ghost{
+  background:transparent;
+  border-color:transparent;
+  box-shadow:none;
+  /* 아래 문장박스 클릭 통과 */
+  pointer-events:none;
+}
+
+/* 본문은 '숨김(공간 유지)' */
+.popover.ghost .popbody{
+  visibility:hidden;
+}
+
+/* 상단바는 배경을 없애고, 클릭은 버튼(오른쪽 그룹)만 받음 */
+.popover.ghost .popbar{
+  background:transparent;
+  border:0;
+  border-radius:0;
+  pointer-events:none; /* 빈 영역은 클릭 통과 */
+}
+
+/* 앞으로/뒤로는 숨기되 공간 유지(버튼 위치 흔들림 방지) */
+.popover.ghost .popbar-left{
+  visibility:hidden;
+  pointer-events:none;
+}
+
+/* 오른쪽 버튼(선택/수정/닫기)은 계속 클릭 가능 */
+.popover.ghost .popbar-right,
+.popover.ghost .popbar-right *{
+  pointer-events:auto;
+}
+
+
+
+/* ====== Japanese glyph forcing ======
+   Japanese original/token/kanji glyphs should use JP font/lang so 新字体-like glyphs
+   do not fall back to Korean CJK glyph forms. Korean translation stays on --font-ko. */
+.ruby-line,
+.ruby-line *,
+.tok,
+.tok *,
+.sub-head-row a.surf,
+.sub-head-row a.surf *,
+.kbox-head{
+  font-family:var(--font-ja);
+  font-synthesis-weight:none;
+}
+.trans-line,
+.sub-head-row .meaning,
+.kbox-body,
+.kbox-desc{
+  font-family:var(--font-ko);
+}
+
+/* 루비 줄 */
+.ruby-line{
+  line-height:1.85;
+  font-size:18px;
+  color:#cfd4ff;
+  word-break:break-word;
+}
+.ruby-line ruby{
+  ruby-position:over;
+  ruby-align:center;
+}
+.ruby-line rt{
+  font-size:12px;
+  color:#9fb3ff;
+}
+.tok{
+  padding:2px 4px;
+  border-radius:6px;
+}
+.tok:hover{
+  background:#1f2433;
+  cursor:pointer;
+}
+
+/* 구분선 */
+.sep{
+  border:none;
+  border-top:1px solid var(--border);
+  margin:6px 0;
+}
+
+/* 번역 줄 */
+.trans-line{
+  font-size:18px;
+  line-height:1.65;
+  color:#e7f6ff;
+  word-break:break-word;
+}
+
+/* 헤더 한 줄:
+   [표면형(루비, 링크)]  (lemma)  [번역]
+   - lemma / meaning 이 표면형 글자(형태소)에 맞춰 baseline으로 정렬되도록
+*/
+.sub-head-row{
+  display:flex;
+  flex-wrap:nowrap;
+  align-items:baseline;
+  gap:8px;
+  margin-bottom:8px;
+  font-size:15px;
+  line-height:1.5;
+  color:#fff;
+  overflow:hidden;
+}
+.sub-head-row a.surf{
+  flex:0 0 auto;
+  color:#fff;
+  text-decoration:none;
+  font-weight:700;
+  font-size:16px;
+  line-height:1.5;
+}
+.sub-head-row a.surf ruby rt{
+  font-size:11px;
+  line-height:1.2;
+  color:#9fb3ff;
+}
+.sub-head-row .lemma{
+  flex:0 0 auto;
+  opacity:.7;
+  font-size:14px;
+}
+.sub-head-row .meaning{
+  flex:1 1 auto;
+  min-width:0;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  color:#e7f6ff;
+  font-size:15px;
+  font-weight:500;
+}
+
+/* 한자들 래핑 */
+.kwrap{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  margin-bottom:8px;
+}
+
+/* 개별 한자 박스 */
+.kbox{
+  background:#102744; /* learn 기본 */
+  color:#e8eefc;
+  border:1px solid #2a5d9a;
+  border-radius:10px;
+  padding:6px 10px;
+  font-weight:700;
+  cursor:pointer;
+  line-height:1.4;
+  width:100%;
+  min-width:0;
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.kbox.learn{
+  background:#102744;
+  border-color:#2a5d9a;
+}
+.kbox.anki{
+  background:#151a22;
+  color:#e8eefc;
+  border-color:#2a2f3b;
+}
+.kbox-head{
+  font-size:16px;
+  font-weight:700;
+  margin:0;
+  flex:0 0 auto;
+}
+.kbox-head::after{
+  content:" • ";
+  opacity:.75;
+  font-weight:600;
+}
+.kbox-body{
+  font-size:13px;
+  font-weight:600;
+  opacity:.9;
+  margin:0;
+  flex:1 1 auto;
+  min-width:0;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+/* 암기박사 상세 설명 */
+.k-explain{
+  background:#1a1f29;
+  border:1px solid #2a2f3b;
+  border-radius:8px;
+  padding:8px;
+  font-size:13px;
+  line-height:1.5;
+  opacity:.95;
+  word-break:break-word;
+  white-space:normal;
+  margin-bottom:8px;
+}
+
+/* dialog / edit */
+dialog{
+  border:none;
+  border-radius:12px;
+  background:var(--pop);
+  color:var(--ink);
+}
+.edit-form{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  min-width:min(86vw, 560px);
+}
+textarea{
+  width:100%;
+  background:#11121a;
+  color:var(--ink);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:8px;
+  font-size:16px;
+}
+menu{
+  display:flex;
+  justify-content:flex-end;
+  gap:8px;
+  margin:0;
+  padding:0;
+}
+
+/* 선택 방지 */
+img, .box, .popover{
+  -webkit-user-select:none;
+  user-select:none;
+}
+
+/* === Kanji box accordion (text-translator style) === */
+.kbox{ display:block; }
+.kbox-headrow{ display:flex; align-items:baseline; gap:8px; min-width:0; }
+.kbox-desc{
+  display:none;
+  margin-top:8px;
+  padding-top:6px;
+  border-top:1px solid rgba(255,255,255,.08);
+  font-size:12px;
+  font-weight:500;
+  opacity:.92;
+  white-space:normal;
+  word-break:break-word;
+  line-height:1.5;
+}
+/* 설명(텍스트) + #번호 배지 */
+.kdesc-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.kdesc-text{
+  flex:1 1 auto;
+  min-width:0;
+}
+.kdesc-badge{
+  flex:0 0 auto;
+  white-space:nowrap;
+  font-size:11px;
+  line-height:1;
+  padding:4px 8px;
+  border-radius:999px;
+  background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.10);
+  opacity:.92;
+}
+
+.kbox.open .kbox-desc{ display:block; }
+
+/* ====== Learning log save buttons ====== */
+.save-row{
+  display:flex;
+  justify-content:flex-end;
+  align-items:center;
+  gap:6px;
+  margin-top:6px;
+}
+.savebtn{
+  height:28px;
+  min-width:36px;
+  padding:0 9px;
+  border-radius:9px;
+  background:#242936;
+  color:#fff;
+  border:1px solid #3a4152;
+  font-size:14px;
+  font-weight:800;
+  line-height:26px;
+  cursor:pointer;
+  user-select:none;
+}
+.savebtn:active{ filter:brightness(1.18); }
+.savebtn.saved{
+  background:#12351f;
+  border-color:#267a43;
+}
+.savebtn.error{
+  background:#3a1820;
+  border-color:#8d3346;
+}
+.session-form{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  min-width:min(88vw, 620px);
+}
+.session-input{
+  width:100%;
+  background:#11121a;
+  color:var(--ink);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:10px;
+  font-size:15px;
+}
+.session-hint{
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.4;
+}
+.session-candidates{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  max-height:220px;
+  overflow:auto;
+}
+.session-candidate{
+  text-align:left;
+  border:1px solid #303747;
+  background:#171b25;
+  color:var(--ink);
+  border-radius:10px;
+  padding:8px 10px;
+  cursor:pointer;
+}
+.session-candidate .title{
+  font-weight:700;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.session-candidate .url{
+  margin-top:2px;
+  color:var(--muted);
+  font-size:12px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}

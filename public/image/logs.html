@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JP Learning Log</title>
+  <link rel="stylesheet" href="./style.css" />
+  <style>
+    body{background:#0b0b0c;color:#e8e8ea;padding:18px;font-family:var(--font-ko);} 
+    main{max-width:980px;margin:0 auto;} 
+    .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0 18px;} 
+    .toolbar input{flex:1 1 340px;background:#11121a;color:#fff;border:1px solid #2a2a31;border-radius:10px;padding:10px;} 
+    .card{background:#141417;border:1px solid #2a2a31;border-radius:12px;padding:12px;margin:10px 0;} 
+    .card h3{margin:0 0 5px;font-size:16px;} 
+    .meta{color:#a9abb3;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} 
+    .actions{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;} 
+    .btn{height:32px;border-radius:9px;border:1px solid #3a3f4a;background:#2b2f3a;color:#fff;padding:0 12px;cursor:pointer;} 
+    .btn.danger{background:#3a1820;border-color:#8d3346;} 
+    a.btn{display:inline-flex;align-items:center;text-decoration:none;}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>JP Learning Log</h1>
+    <p class="meta">임시 서버에 저장된 세션을 확인하고, PC로 export하거나 삭제하는 관리 화면.</p>
+    <div class="toolbar">
+      <input id="workerBase" placeholder="Log Worker URL" />
+      <button id="saveBase" class="btn">Worker URL 저장</button>
+      <button id="setToken" class="btn">APP_TOKEN 입력</button>
+      <button id="refresh" class="btn">새로고침</button>
+    </div>
+    <div class="toolbar">
+      <a id="exportJson" class="btn" target="_blank" rel="noopener">JSON export</a>
+      <a id="exportTsv" class="btn" target="_blank" rel="noopener">Anki TSV export</a>
+    </div>
+    <div id="list">불러오는 중…</div>
+  </main>
+  <script type="module" src="./src/logs.js"></script>
+</body>
+</html>
