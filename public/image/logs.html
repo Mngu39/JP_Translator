@@ -6,34 +6,82 @@
   <title>JP Learning Log</title>
   <link rel="stylesheet" href="./style.css" />
   <style>
-    body{background:#0b0b0c;color:#e8e8ea;padding:18px;font-family:var(--font-ko);} 
-    main{max-width:980px;margin:0 auto;} 
-    .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0 18px;} 
-    .toolbar input{flex:1 1 340px;background:#11121a;color:#fff;border:1px solid #2a2a31;border-radius:10px;padding:10px;} 
-    .card{background:#141417;border:1px solid #2a2a31;border-radius:12px;padding:12px;margin:10px 0;} 
-    .card h3{margin:0 0 5px;font-size:16px;} 
-    .meta{color:#a9abb3;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} 
-    .actions{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;} 
-    .btn{height:32px;border-radius:9px;border:1px solid #3a3f4a;background:#2b2f3a;color:#fff;padding:0 12px;cursor:pointer;} 
-    .btn.danger{background:#3a1820;border-color:#8d3346;} 
-    a.btn{display:inline-flex;align-items:center;text-decoration:none;}
+    :root{color-scheme:dark;}
+    *{box-sizing:border-box;}
+    body{margin:0;background:#0b0b0c;color:#e8e8ea;padding:22px;font-family:var(--font-ko,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);}
+    main{max-width:1180px;margin:0 auto;}
+    h1{font-size:34px;margin:6px 0 10px;letter-spacing:.01em;}
+    h2{font-size:23px;line-height:1.45;margin:12px 0 6px;}
+    .lead{color:#a9abb3;margin:0 0 18px;}
+    .toolbar{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:10px 0;}
+    .toolbar input{flex:1 1 420px;min-width:220px;background:#11121a;color:#fff;border:1px solid #2d3039;border-radius:12px;padding:12px 14px;font-size:15px;}
+    .btn,.filter{min-height:40px;border-radius:10px;border:1px solid #3a3f4a;background:#2b2f3a;color:#fff;padding:8px 14px;cursor:pointer;font:inherit;}
+    .btn:hover,.filter:hover{background:#373c49;}
+    .btn:disabled{opacity:.55;cursor:wait;}
+    .btn.danger{background:#3a1820;border-color:#8d3346;}
+    .btn.danger:hover{background:#4b1c28;}
+    .status-row{min-height:25px;margin:8px 0 14px;color:#a9abb3;font-size:13px;}
+    .session-list{display:grid;gap:14px;}
+    .session-card,.detail-head,.item-card{background:#141417;border:1px solid #2a2a31;border-radius:16px;}
+    .session-card{padding:18px 20px;}
+    .session-title{display:block;color:#f0f0f2;text-decoration:none;font-weight:750;font-size:18px;line-height:1.45;margin-bottom:7px;}
+    .session-title:hover{text-decoration:underline;text-underline-offset:4px;}
+    .source-link{display:inline-block;color:#9eb7e7;text-decoration:none;overflow-wrap:anywhere;font-size:13px;}
+    .source-link:hover{text-decoration:underline;}
+    .session-meta{display:flex;gap:8px 16px;flex-wrap:wrap;color:#a9abb3;font-size:13px;margin-top:9px;}
+    .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;}
+    .detail-head{padding:20px;margin-bottom:14px;}
+    .back-link{color:#b6c7e8;text-decoration:none;font-size:14px;}
+    .filters{position:sticky;top:0;z-index:5;display:flex;gap:8px;padding:10px 0;background:rgba(11,11,12,.94);backdrop-filter:blur(8px);}
+    .filter{min-height:36px;padding:6px 14px;background:#1c1e25;}
+    .filter.active{background:#e8e8ea;color:#111;border-color:#e8e8ea;font-weight:700;}
+    .item-list{display:grid;gap:14px;padding-bottom:50px;}
+    .item-card{padding:17px 18px;overflow:hidden;}
+    .item-top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;}
+    .item-top time{font-size:12px;color:#91949d;}
+    .badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:750;}
+    .badge.sentence{background:#17324a;color:#b7dcff;}
+    .badge.word{background:#3b2912;color:#ffdb9a;}
+    .shot{display:flex;align-items:center;justify-content:center;min-height:80px;margin-bottom:16px;border-radius:12px;background:#0d0e11;color:#777;overflow:hidden;}
+    .shot img{display:block;width:100%;max-height:640px;object-fit:contain;}
+    .shot.loading{font-size:13px;}
+    .sentence-title{font-size:25px;font-weight:680;line-height:1.55;overflow-wrap:anywhere;}
+    .word-title{font-size:34px;font-weight:780;line-height:1.35;}
+    .reading{font-size:17px;color:#b9bdc7;margin-top:2px;}
+    .translation{font-size:20px;font-weight:650;margin-top:9px;white-space:pre-wrap;}
+    .info-block{margin-top:14px;padding:12px 14px;background:#1b1c21;border-radius:11px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;}
+    .info-label{color:#9297a2;font-size:11px;font-weight:750;letter-spacing:.06em;margin-bottom:5px;}
+    .jp-source{font-size:19px;}
+    .ko-source{margin-top:5px;color:#d1d3d8;}
+    mark{background:transparent;color:#ff777f;font-weight:800;}
+    .loading-text,.empty,.error{padding:28px 10px;color:#a9abb3;text-align:center;}
+    .error{color:#ff9fa7;}
+    [hidden]{display:none!important;}
+    @media (max-width:680px){
+      body{padding:14px;} h1{font-size:28px;}
+      .toolbar input{flex-basis:100%;}
+      .toolbar .btn{flex:1 1 auto;}
+      .session-card,.detail-head,.item-card{padding:14px;}
+      .sentence-title{font-size:22px;}.word-title{font-size:30px;}
+      .filters{overflow-x:auto;}
+    }
   </style>
 </head>
 <body>
   <main>
     <h1>JP Learning Log</h1>
-    <p class="meta">임시 서버에 저장된 세션을 확인하고, PC로 export하거나 삭제하는 관리 화면.</p>
+    <p class="lead">세션별로 저장된 문장과 단어를 확인하고, Anki 덱으로 내보내는 관리 화면.</p>
     <div class="toolbar">
-      <input id="workerBase" placeholder="Log Worker URL" />
+      <input id="workerBase" placeholder="Worker URL" />
       <button id="saveBase" class="btn">Worker URL 저장</button>
       <button id="setToken" class="btn">APP_TOKEN 입력</button>
       <button id="refresh" class="btn">새로고침</button>
     </div>
     <div class="toolbar">
-      <a id="exportJson" class="btn" target="_blank" rel="noopener">JSON export</a>
-      <a id="exportTsv" class="btn" target="_blank" rel="noopener">Anki TSV export</a>
+      <button id="exportAll" class="btn" data-apkg>전체 APKG 내보내기</button>
     </div>
-    <div id="list">불러오는 중…</div>
+    <div id="exportStatus" class="status-row" aria-live="polite"></div>
+    <div id="mainView">불러오는 중…</div>
   </main>
   <script type="module" src="./src/logs.js"></script>
 </body>
