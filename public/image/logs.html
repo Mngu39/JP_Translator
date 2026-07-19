@@ -32,14 +32,21 @@
     .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;}
     .detail-head{padding:20px;margin-bottom:14px;}
     .back-link{color:#b6c7e8;text-decoration:none;font-size:14px;}
-    .filters{position:sticky;top:0;z-index:5;display:flex;gap:8px;padding:10px 0;background:rgba(11,11,12,.94);backdrop-filter:blur(8px);}
+    .filters{position:sticky;top:0;z-index:5;display:flex;gap:8px;padding:10px 0;background:rgba(11,11,12,.94);backdrop-filter:blur(8px);align-items:center;}
     .filter{min-height:36px;padding:6px 14px;background:#1c1e25;}
     .filter.active{background:#e8e8ea;color:#111;border-color:#e8e8ea;font-weight:700;}
-    .item-list{display:grid;gap:8px;padding-bottom:50px;}
+    .selection-toggle{margin-left:auto;}
+    .item-list{display:grid;gap:8px;padding-bottom:76px;}
     .item-row{position:relative;overflow:visible;}
     .item-row.expanded{border-color:#3a3d46;}
+    .item-row.selected{border-color:#6999e8;background:#151923;}
     .item-summary{display:grid;grid-template-columns:auto minmax(0,1.25fr) minmax(0,.9fr) auto;align-items:center;gap:10px;min-height:58px;padding:8px 10px 8px 12px;cursor:pointer;}
     .item-summary:hover{background:#19191d;border-radius:15px;}
+    .select-mark{display:none;width:30px;height:30px;border-radius:8px;border:1px solid #515866;background:#151820;color:#fff;font-weight:800;cursor:pointer;}
+    .selection-mode .select-mark{display:inline-grid;place-items:center;}
+    .selection-mode .item-summary{grid-template-columns:auto auto minmax(0,1.25fr) minmax(0,.9fr);}
+    .selection-mode .more-wrap{display:none;}
+    .item-row.selected .select-mark{background:#e8e8ea;color:#101116;border-color:#e8e8ea;}
     .summary-jp,.summary-meaning{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .summary-jp{font-size:21px;font-weight:680;line-height:1.7;}
     .summary-meaning{font-size:16px;color:#d7d8dc;}
@@ -65,6 +72,11 @@
     .info-label{color:#9297a2;font-size:11px;font-weight:750;letter-spacing:.06em;margin-bottom:4px;}
     .jp-source{font-size:18px;line-height:1.9;}
     .ko-source{margin-top:4px;color:#d1d3d8;}
+    .kanji-row{display:flex;align-items:baseline;gap:10px 14px;flex-wrap:wrap;padding:4px 0;}
+    .kanji-char{font-size:24px;font-weight:800;min-width:1.4em;}
+    .kanji-ko{font-weight:700;color:#e7e8eb;}
+    .reading-group{display:inline-flex;align-items:center;gap:6px;}
+    .reading-badge{display:inline-grid;place-items:center;min-width:25px;height:22px;border-radius:6px;background:#303540;color:#cdd9ee;font-size:12px;font-weight:800;}
     .detail-meta{margin-top:10px;color:#8f929a;font-size:12px;text-align:right;}
     mark{background:transparent;color:#ff777f;font-weight:800;}
     .loading-text,.empty,.error{padding:28px 10px;color:#a9abb3;text-align:center;}
@@ -76,10 +88,20 @@
     .modal-close{position:fixed;right:18px;top:16px;z-index:3;width:46px;height:46px;border:1px solid #565a65;border-radius:50%;background:#202228;color:#fff;font-size:30px;line-height:1;cursor:pointer;}
     .modal-frame{position:relative;display:inline-block;max-width:94vw;max-height:90vh;}
     .modal-frame img{display:block;max-width:94vw;max-height:90vh;width:auto;height:auto;object-fit:contain;border-radius:8px;}
-    .move-dialog{width:min(520px,calc(100vw - 28px));border:1px solid #444853;border-radius:14px;background:#17181d;padding:18px;}
-    .move-dialog h3{margin:0 0 12px;}
-    .move-dialog select{width:100%;padding:11px;background:#101116;color:#fff;border:1px solid #383c46;border-radius:9px;font:inherit;}
-    .dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}
+    .manage-dialog,.choice-dialog{width:min(620px,calc(100vw - 28px));border:1px solid #444853;border-radius:14px;background:#17181d;padding:18px;}
+    .manage-dialog h3,.choice-dialog h3{margin:0 0 12px;}
+    .dialog-input-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:7px;}
+    .dialog-input,.existing-search{width:100%;padding:11px;background:#101116;color:#fff;border:1px solid #383c46;border-radius:9px;font:inherit;}
+    .dialog-hint{min-height:20px;color:#aeb1b9;font-size:12px;margin-top:8px;}
+    .existing-panel{margin-top:12px;border-top:1px solid #30333b;padding-top:12px;}
+    .existing-list{display:grid;gap:6px;max-height:280px;overflow:auto;margin-top:8px;}
+    .existing-item{border:1px solid #353944;background:#20222a;color:#eee;border-radius:9px;padding:9px 11px;text-align:left;cursor:pointer;}
+    .existing-item:hover{background:#2d3039;}
+    .existing-item strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .existing-item small{display:block;margin-top:3px;color:#989ca6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;flex-wrap:wrap;}
+    .bulk-bar{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:20;display:flex;align-items:center;gap:8px;padding:10px 12px;background:#22252d;border:1px solid #484d59;border-radius:14px;box-shadow:0 14px 40px rgba(0,0,0,.5);}
+    .bulk-count{min-width:82px;font-weight:700;}
     [hidden]{display:none!important;}
     @media (max-width:820px){
       body{padding:14px;} h1{font-size:28px;}
@@ -92,7 +114,14 @@
       .summary-jp{grid-area:jp;font-size:19px;}
       .summary-meaning{grid-area:meaning;font-size:14px;color:#bfc2c9;}
       .more-wrap{grid-area:more;}
+      .selection-mode .item-summary{grid-template-columns:auto auto minmax(0,1fr);grid-template-areas:"select badge jp" "select badge meaning";}
+      .selection-mode .select-mark{grid-area:select;}
+      .selection-mode .badge{grid-area:badge;}
+      .selection-mode .summary-jp{grid-area:jp;}
+      .selection-mode .summary-meaning{grid-area:meaning;}
       .image-modal-shell{padding:54px 10px 10px;}
+      .dialog-input-row{grid-template-columns:1fr 1fr;}.dialog-input-row .dialog-input{grid-column:1/-1;}
+      .bulk-bar{width:calc(100vw - 20px);bottom:10px;justify-content:center;flex-wrap:wrap;}
     }
   </style>
 </head>
@@ -114,6 +143,14 @@
     <div id="mainView">불러오는 중…</div>
   </main>
 
+  <div id="bulkBar" class="bulk-bar" hidden>
+    <span id="bulkCount" class="bulk-count">0개 선택</span>
+    <button id="bulkSelectAll" class="btn" type="button">전체 선택</button>
+    <button id="bulkMove" class="btn" type="button">이동</button>
+    <button id="bulkDelete" class="btn danger" type="button">삭제</button>
+    <button id="bulkCancel" class="btn" type="button">취소</button>
+  </div>
+
   <dialog id="imageModal" class="image-modal">
     <div class="image-modal-shell">
       <button id="imageModalClose" class="modal-close" type="button" aria-label="닫기">×</button>
@@ -121,15 +158,34 @@
     </div>
   </dialog>
 
-  <dialog id="moveDlg" class="move-dialog">
-    <h3>이동할 세션</h3>
-    <select id="moveTarget"></select>
+  <dialog id="sessionDlg" class="manage-dialog">
+    <h3 id="sessionDlgTitle">세션 선택</h3>
+    <div class="dialog-input-row">
+      <input id="sessionInput" class="dialog-input" type="text" placeholder="세션명 또는 YouTube 링크" autocomplete="off" />
+      <button id="sessionPaste" class="btn" type="button">붙여넣기</button>
+      <button id="sessionExisting" class="btn" type="button">기존 세션</button>
+    </div>
+    <div id="sessionDlgHint" class="dialog-hint"></div>
+    <div id="existingPanel" class="existing-panel" hidden>
+      <input id="existingSearch" class="existing-search" type="search" placeholder="기존 세션 검색" />
+      <div id="existingList" class="existing-list"></div>
+    </div>
     <div class="dialog-actions">
-      <button id="moveCancel" class="btn" type="button">취소</button>
-      <button id="moveOk" class="btn" type="button">이동</button>
+      <button id="sessionCancel" class="btn" type="button">취소</button>
+      <button id="sessionConfirm" class="btn" type="button">적용</button>
     </div>
   </dialog>
 
-  <script type="module" src="./src/logs.js?v=20260719-v6"></script>
+  <dialog id="choiceDlg" class="choice-dialog">
+    <h3 id="choiceTitle">연결 항목</h3>
+    <div id="choiceMessage" class="dialog-hint"></div>
+    <div class="dialog-actions">
+      <button id="choiceCancel" class="btn" type="button">취소</button>
+      <button id="choiceOnly" class="btn" type="button">선택한 항목만</button>
+      <button id="choiceTogether" class="btn" type="button">연결 항목도 함께</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="./src/logs.js?v=20260719-v7"></script>
 </body>
 </html>

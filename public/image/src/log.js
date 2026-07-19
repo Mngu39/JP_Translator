@@ -106,8 +106,8 @@ export function recentSessions(){
   return request(`/api/sessions/recent`);
 }
 
-export function resolveSession(url){
-  return request(`/api/sessions/resolve`, { method:"POST", body:{ url } });
+export function resolveSession(input){
+  return request(`/api/sessions/resolve`, { method:"POST", body:{ input } });
 }
 
 export async function saveItem(payload){

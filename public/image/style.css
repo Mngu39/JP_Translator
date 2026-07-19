@@ -493,3 +493,8 @@ img, .box, .popover{
   text-overflow:ellipsis;
   white-space:nowrap;
 }
+
+/* v7 learning-log session chooser */
+.session-input-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:7px;align-items:center;}
+.session-side-btn{white-space:nowrap;min-height:40px;}
+@media (max-width:640px){.session-input-row{grid-template-columns:1fr 1fr}.session-input-row .session-input{grid-column:1/-1}.session-side-btn{width:100%}}

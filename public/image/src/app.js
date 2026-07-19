@@ -10,10 +10,11 @@ import {
   getLastSession,
   setLastSession,
   searchSessions,
+  recentSessions,
   resolveSession,
   saveItem,
   downscaleImageElement,
-} from "./log.js?v=20260719-v6";
+} from "./log.js?v=20260719-v7";
 
 const stage     = document.getElementById("stage");
 const imgEl     = document.getElementById("img");
@@ -43,6 +44,8 @@ const sessionUrlInput = document.getElementById("sessionUrlInput");
 const sessionCandidates = document.getElementById("sessionCandidates");
 const sessionHint = document.getElementById("sessionHint");
 const sessionUseBtn = document.getElementById("sessionUseBtn");
+const sessionPasteBtn = document.getElementById("sessionPasteBtn");
+const sessionExistingBtn = document.getElementById("sessionExistingBtn");
 
 const btnSaveSentence = document.getElementById("btnSaveSentence");
 const btnNewSaveSentence = document.getElementById("btnNewSaveSentence");
@@ -913,14 +916,17 @@ async function saveToNewOrChosen(itemType, btn){
 let sessionSearchTimer = null;
 function renderSessionCandidates(list, resolve){
   sessionCandidates.innerHTML = "";
-  if(!Array.isArray(list) || !list.length) return;
+  if(!Array.isArray(list) || !list.length){
+    sessionCandidates.innerHTML = `<div class="session-hint">일치하는 기존 세션이 없습니다.</div>`;
+    return;
+  }
   for(const s of list){
     const b = document.createElement("button");
     b.type = "button";
     b.className = "session-candidate";
     b.innerHTML = `
       <div class="title">${escapeHtml(s.title || s.session_key || s.raw_url || s.id)}</div>
-      <div class="url">${escapeHtml(s.canonical_url || s.raw_url || "")}</div>
+      <div class="url">${escapeHtml(s.canonical_url || s.raw_url || "링크 없음")}</div>
     `;
     b.addEventListener("click",()=>{
       setLastSession(s);
@@ -932,44 +938,58 @@ function renderSessionCandidates(list, resolve){
 }
 
 function chooseOrCreateSession(){
-  return new Promise(async resolve=>{
+  return new Promise(resolve=>{
     sessionUrlInput.value = "";
     sessionCandidates.innerHTML = "";
-    sessionHint.textContent = "링크가 기존 세션과 일치하면 아래에 후보가 표시됩니다.";
+    sessionCandidates.hidden = true;
+    sessionHint.textContent = "세션명 또는 YouTube 링크를 입력하세요. 같은 이름이나 링크가 있으면 기존 세션을 사용합니다.";
 
-    // 버튼 클릭 직후라 clipboard 권한이 허용될 수 있다. 실패해도 조용히 무시.
-    try{
-      const clip = await navigator.clipboard?.readText?.();
-      if(/^https?:\/\//i.test((clip||"").trim())){
-        sessionUrlInput.value = clip.trim();
+    const showExisting = async()=>{
+      sessionExistingBtn.disabled = true;
+      sessionCandidates.hidden = false;
+      sessionCandidates.innerHTML = `<div class="session-hint">기존 세션을 불러오는 중…</div>`;
+      try{
+        const q = sessionUrlInput.value.trim();
+        const out = q ? await searchSessions(q) : await recentSessions();
+        renderSessionCandidates(out?.sessions || [], resolve);
+      }catch(e){
+        sessionCandidates.innerHTML = `<div class="session-hint">세션 목록 오류: ${escapeHtml(e.message||e)}</div>`;
+      }finally{
+        sessionExistingBtn.disabled = false;
       }
-    }catch{ /* ignore */ }
+    };
 
     const onInput = ()=>{
+      if(sessionCandidates.hidden) return;
       clearTimeout(sessionSearchTimer);
-      const q = sessionUrlInput.value.trim();
-      if(!q){ sessionCandidates.innerHTML = ""; return; }
-      sessionSearchTimer = setTimeout(async()=>{
-        try{
-          const out = await searchSessions(q);
-          renderSessionCandidates(out?.sessions || [], resolve);
-        }catch(e){
-          console.warn("session search failed", e);
-        }
-      }, 180);
+      sessionSearchTimer = setTimeout(showExisting, 180);
     };
+
+    const onPaste = async ev=>{
+      ev.preventDefault();
+      try{
+        const clip = await navigator.clipboard?.readText?.();
+        if(clip) sessionUrlInput.value = clip.trim();
+        sessionUrlInput.focus();
+        onInput();
+      }catch(e){
+        sessionHint.textContent = `붙여넣기 실패: ${e.message || e}`;
+      }
+    };
+
+    const onExisting = ev=>{ ev.preventDefault(); showExisting(); };
 
     const onUse = async ev=>{
       ev.preventDefault();
-      const url = sessionUrlInput.value.trim();
-      if(!url){
-        sessionHint.textContent = "세션 링크를 입력하세요.";
+      const input = sessionUrlInput.value.trim();
+      if(!input){
+        sessionHint.textContent = "세션명 또는 YouTube 링크를 입력하세요.";
         return;
       }
       sessionUseBtn.disabled = true;
       sessionUseBtn.textContent = "확인 중…";
       try{
-        const out = await resolveSession(url);
+        const out = await resolveSession(input);
         const session = out?.session;
         if(!session) throw new Error("세션 생성/조회 실패");
         setLastSession(session);
@@ -989,17 +1009,21 @@ function chooseOrCreateSession(){
       if(sessionDlg.returnValue !== "ok" && sessionDlg.returnValue !== "selected") resolve(null);
     };
     const cleanup = ()=>{
+      clearTimeout(sessionSearchTimer);
       sessionUrlInput.removeEventListener("input", onInput);
+      sessionPasteBtn.removeEventListener("click", onPaste);
+      sessionExistingBtn.removeEventListener("click", onExisting);
       sessionUseBtn.removeEventListener("click", onUse);
       sessionDlg.removeEventListener("close", onClose);
     };
 
     sessionUrlInput.addEventListener("input", onInput);
+    sessionPasteBtn.addEventListener("click", onPaste);
+    sessionExistingBtn.addEventListener("click", onExisting);
     sessionUseBtn.addEventListener("click", onUse);
     sessionDlg.addEventListener("close", onClose, {once:true});
     sessionDlg.showModal();
     sessionUrlInput.focus();
-    onInput();
   });
 }
 

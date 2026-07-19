@@ -66,10 +66,14 @@
     <!-- 학습로그 세션 선택/생성 다이얼로그 -->
     <dialog id="sessionDlg">
       <form method="dialog" class="session-form">
-        <label for="sessionUrlInput">세션 링크</label>
-        <input id="sessionUrlInput" class="session-input" type="url" placeholder="YouTube 링크를 붙여넣기" autocomplete="off" />
-        <div id="sessionHint" class="session-hint">링크가 기존 세션과 일치하면 아래에 후보가 표시됩니다.</div>
-        <div id="sessionCandidates" class="session-candidates"></div>
+        <label for="sessionUrlInput">세션명 또는 YouTube 링크</label>
+        <div class="session-input-row">
+          <input id="sessionUrlInput" class="session-input" type="text" placeholder="세션명 또는 YouTube 링크" autocomplete="off" />
+          <button id="sessionPasteBtn" type="button" class="btn ghost session-side-btn">붙여넣기</button>
+          <button id="sessionExistingBtn" type="button" class="btn ghost session-side-btn">기존 세션</button>
+        </div>
+        <div id="sessionHint" class="session-hint">같은 이름이나 링크가 있으면 기존 세션을 사용합니다.</div>
+        <div id="sessionCandidates" class="session-candidates" hidden></div>
         <menu>
           <button value="cancel" class="btn ghost">취소</button>
           <button id="sessionUseBtn" value="ok" class="btn">저장</button>
@@ -80,6 +84,6 @@
     </div>
   </main>
 
-  <script type="module" src="./src/app.js?v=20260719-v6"></script>
+  <script type="module" src="./src/app.js?v=20260719-v7"></script>
 </body>
 </html>

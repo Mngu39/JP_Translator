@@ -15,19 +15,45 @@ const mainView=document.getElementById("mainView");
 const exportStatus=document.getElementById("exportStatus");
 const exportAll=document.getElementById("exportAll");
 const deleteAll=document.getElementById("deleteAll");
+
 const imageModal=document.getElementById("imageModal");
 const imageModalBody=document.getElementById("imageModalBody");
 const imageModalClose=document.getElementById("imageModalClose");
-const moveDlg=document.getElementById("moveDlg");
-const moveTarget=document.getElementById("moveTarget");
-const moveCancel=document.getElementById("moveCancel");
-const moveOk=document.getElementById("moveOk");
+
+const sessionDlg=document.getElementById("sessionDlg");
+const sessionDlgTitle=document.getElementById("sessionDlgTitle");
+const sessionInput=document.getElementById("sessionInput");
+const sessionPaste=document.getElementById("sessionPaste");
+const sessionExisting=document.getElementById("sessionExisting");
+const sessionDlgHint=document.getElementById("sessionDlgHint");
+const existingPanel=document.getElementById("existingPanel");
+const existingSearch=document.getElementById("existingSearch");
+const existingList=document.getElementById("existingList");
+const sessionCancel=document.getElementById("sessionCancel");
+const sessionConfirm=document.getElementById("sessionConfirm");
+
+const choiceDlg=document.getElementById("choiceDlg");
+const choiceTitle=document.getElementById("choiceTitle");
+const choiceMessage=document.getElementById("choiceMessage");
+const choiceCancel=document.getElementById("choiceCancel");
+const choiceOnly=document.getElementById("choiceOnly");
+const choiceTogether=document.getElementById("choiceTogether");
+
+const bulkBar=document.getElementById("bulkBar");
+const bulkCount=document.getElementById("bulkCount");
+const bulkSelectAll=document.getElementById("bulkSelectAll");
+const bulkMove=document.getElementById("bulkMove");
+const bulkDelete=document.getElementById("bulkDelete");
+const bulkCancel=document.getElementById("bulkCancel");
 
 const mediaUrls=new Map();
 let currentSession=null;
 let currentItems=[];
 let sessionsCache=[];
-let movingItemId="";
+let selectionMode=false;
+let selectedIds=new Set();
+let currentFilter="all";
+let kanjiDbPromise=null;
 
 function esc(s){
   return String(s ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -73,13 +99,8 @@ async function authFetch(path,opts={}){
   return r;
 }
 
-async function api(path,opts={}){
-  return (await authFetch(path,opts)).json();
-}
-
-async function fetchMedia(mediaId){
-  return (await authFetch(`/api/media/${encodeURIComponent(mediaId)}`)).blob();
-}
+async function api(path,opts={}){ return (await authFetch(path,opts)).json(); }
+async function fetchMedia(mediaId){ return (await authFetch(`/api/media/${encodeURIComponent(mediaId)}`)).blob(); }
 
 async function getMediaUrl(mediaId){
   if(mediaUrls.has(mediaId)) return mediaUrls.get(mediaId);
@@ -94,16 +115,46 @@ function clearMediaUrls(){
   mediaUrls.clear();
 }
 
-function sessionIdFromUrl(){
-  return new URL(location.href).searchParams.get("session") || "";
+function sessionIdFromUrl(){ return new URL(location.href).searchParams.get("session") || ""; }
+function setStatus(message){ exportStatus.textContent=message || ""; }
+function setExportBusy(busy){ for(const btn of document.querySelectorAll("[data-apkg],#exportAll")) btn.disabled=busy; }
+
+function kanjiDbUrl(){
+  return location.pathname.includes("/image/")
+    ? "../text/kanji_ko_attr_irreg.min.json?v=20260719-v7"
+    : "./text/kanji_ko_attr_irreg.min.json?v=20260719-v7";
 }
 
-function setStatus(message){
-  exportStatus.textContent=message || "";
+async function loadKanjiDb(){
+  if(!kanjiDbPromise){
+    kanjiDbPromise=fetch(kanjiDbUrl(),{cache:"no-store"})
+      .then(r=>r.ok?r.json():{})
+      .catch(()=>({}));
+  }
+  return kanjiDbPromise;
 }
 
-function setExportBusy(busy){
-  for(const btn of document.querySelectorAll("[data-apkg],#exportAll")) btn.disabled=busy;
+function parseJson(raw,fallback=null){
+  try{return JSON.parse(raw);}catch{return fallback;}
+}
+
+async function enrichKanjiJson(raw){
+  const db=await loadKanjiDb();
+  const arr=parseJson(raw,[]);
+  if(!Array.isArray(arr)) return "[]";
+  return JSON.stringify(arr.map(k=>{
+    const ch=String(k?.char||"");
+    const rec=db?.[ch]||{};
+    const ko=String(rec["훈음"] || [rec["훈"],rec["음"]].filter(Boolean).join(" ") || "").trim();
+    return {char:ch,onyomi:String(k?.onyomi||""),kunyomi:String(k?.kunyomi||""),meaning_ko:ko};
+  }));
+}
+
+async function enrichItems(items){
+  return Promise.all((items||[]).map(async item=>({
+    ...item,
+    kanji_json:item.item_type==="kanji_box" ? await enrichKanjiJson(item.kanji_json) : "[]"
+  })));
 }
 
 async function exportApkg(sessionId="",title=""){
@@ -113,6 +164,7 @@ async function exportApkg(sessionId="",title=""){
     const q=new URLSearchParams({ai:"1"});
     if(sessionId) q.set("session_id",sessionId);
     const data=await api(`/api/export/apkg-data?${q}`);
+    data.items=await enrichItems(data.items||[]);
     const out=await createAnkiApkg(data,{fetchMedia,onProgress:setStatus});
     const base=sessionId ? `JP_Translator_${safeFilePart(title)}` : "JP_Translator_All";
     downloadBlob(out.blob,`${base}_${timestampName()}.apkg`);
@@ -124,10 +176,6 @@ async function exportApkg(sessionId="",title=""){
   }finally{
     setExportBusy(false);
   }
-}
-
-function parseJson(raw,fallback=null){
-  try{return JSON.parse(raw);}catch{return fallback;}
 }
 
 function hasKanji(s){ return /[\u3400-\u9fff]/.test(String(s||"")); }
@@ -150,23 +198,16 @@ function rubyWord(word,reading){
   return w&&r ? `<ruby lang="ja">${esc(w)}<rt>${esc(r)}</rt></ruby>` : esc(w);
 }
 
-function highlight(item){
-  const source=String(item.source_text||"");
-  const start=Number(item.target_start_index);
-  const end=Number(item.target_end_index);
-  if(Number.isFinite(start)&&Number.isFinite(end)&&start>=0&&end>start&&end<=source.length){
-    return `${esc(source.slice(0,start))}<mark>${esc(source.slice(start,end))}</mark>${esc(source.slice(end))}`;
-  }
-  const target=String(item.target_surface||item.target_word||"");
-  const idx=target ? source.indexOf(target) : -1;
-  if(idx>=0) return `${esc(source.slice(0,idx))}<mark>${esc(target)}</mark>${esc(source.slice(idx+target.length))}`;
-  return esc(source);
-}
-
 function kanjiLines(raw){
   const arr=parseJson(raw,[]);
   if(!Array.isArray(arr)||!arr.length) return "";
-  return `<div class="info-block"><div class="info-label">한자 정보</div>${arr.map(k=>`<div><strong>${esc(k.char||"")}</strong>　음독 ${esc(k.onyomi||"-")} · 훈독 ${esc(k.kunyomi||"-")} · ${esc(k.meaning_ko||"")}</div>`).join("")}</div>`;
+  return `<div class="info-block"><div class="info-label">한자 정보</div>${arr.map(k=>`
+    <div class="kanji-row">
+      <strong class="kanji-char">${esc(k.char||"")}</strong>
+      <span class="kanji-ko">${esc(k.meaning_ko||"정보 없음")}</span>
+      <span class="reading-group"><span class="reading-badge">音</span><span>${esc(k.onyomi||"-")}</span></span>
+      <span class="reading-group"><span class="reading-badge">訓</span><span>${esc(k.kunyomi||"-")}</span></span>
+    </div>`).join("")}</div>`;
 }
 
 function bboxData(item){
@@ -176,11 +217,7 @@ function bboxData(item){
   if(![x,y,width,height].every(Number.isFinite)||width<=0||height<=0) return null;
   return {x,y,width,height};
 }
-
-function bboxAttr(item){
-  const b=bboxData(item);
-  return b ? esc(JSON.stringify(b)) : "";
-}
+function bboxAttr(item){ const b=bboxData(item); return b ? esc(JSON.stringify(b)) : ""; }
 
 function itemSummary(item){
   const isWord=item.item_type==="kanji_box";
@@ -192,6 +229,7 @@ function itemSummary(item){
     : (item.source_translation||item.ui_translation||"");
   return `<article class="item-row" data-kind="${isWord?"word":"sentence"}" data-item-id="${esc(item.id)}">
     <div class="item-summary" role="button" tabindex="0" aria-expanded="false">
+      <button class="select-mark" type="button" data-select-item="${esc(item.id)}" aria-label="선택">✓</button>
       <span class="badge ${isWord?"word":"sentence"}">${isWord?"단어":"문장"}</span>
       <div class="summary-jp" lang="ja" title="${esc(isWord?(item.target_word||item.target_surface||""):(item.source_text||""))}">${jp}</div>
       <div class="summary-meaning" title="${esc(meaning)}">${esc(meaning)}</div>
@@ -247,16 +285,21 @@ async function showImage(mediaId,bboxRaw){
   imageModalBody.innerHTML=`<div class="modal-frame"><img src="${url}" alt="저장된 스크린샷 원본">${focusBoxHtml(bbox)}</div>`;
   imageModal.showModal();
 }
+function closeImageModal(){ if(imageModal.open) imageModal.close(); imageModalBody.innerHTML=""; }
 
-function closeImageModal(){
-  if(imageModal.open) imageModal.close();
-  imageModalBody.innerHTML="";
+function sourceLinkHtml(s,label=null){
+  const url=s?.canonical_url||s?.raw_url||"";
+  if(!url) return "";
+  return `<a class="source-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(label||url)}</a>`;
 }
 
 async function loadOverview(){
   clearMediaUrls();
   currentSession=null;
   currentItems=[];
+  selectionMode=false;
+  selectedIds.clear();
+  updateBulkBar();
   mainView.innerHTML="<div class=loading-text>세션 목록을 불러오는 중…</div>";
   const out=await api("/api/sessions/recent");
   sessionsCache=out.sessions||[];
@@ -267,11 +310,11 @@ async function loadOverview(){
   mainView.innerHTML=`<div class="session-list">${sessionsCache.map(s=>`
     <section class="session-card" data-id="${esc(s.id)}" data-title="${esc(s.title||"")}">
       <a class="session-title" href="?session=${encodeURIComponent(s.id)}">${esc(s.title||s.session_key||s.id)}</a>
-      <a class="source-link" href="${esc(s.canonical_url||s.raw_url||"#")}" target="_blank" rel="noopener">${esc(s.canonical_url||s.raw_url||"")}</a>
+      ${sourceLinkHtml(s)}
       <div class="session-meta"><span>문장 ${Number(s.sentence_count||0)}개</span><span>단어 ${Number(s.word_count||0)}개</span><span>마지막 저장 ${esc(fmtDate(s.last_used_at))}</span></div>
       <div class="actions">
-        <button class="btn" data-session-act="rename">세션명 변경</button>
-        <button class="btn" data-session-act="export" data-apkg>이 세션 APKG</button>
+        <button class="btn" data-session-act="export" data-apkg>이 세션 APKG 내보내기</button>
+        <button class="btn" data-session-act="edit">세션명 변경</button>
         <button class="btn danger" data-session-act="delete">세션 삭제</button>
       </div>
     </section>`).join("")}</div>`;
@@ -279,20 +322,24 @@ async function loadOverview(){
 
 async function loadDetail(sessionId){
   clearMediaUrls();
+  selectionMode=false;
+  selectedIds.clear();
+  currentFilter="all";
+  updateBulkBar();
   mainView.innerHTML="<div class=loading-text>저장된 카드와 AI 설명을 불러오는 중…</div>";
   const out=await api(`/api/sessions/${encodeURIComponent(sessionId)}/detail?ai=1`);
   currentSession=out.session;
-  currentItems=out.items||[];
+  currentItems=await enrichItems(out.items||[]);
   const s=currentSession;
   mainView.innerHTML=`
     <section class="detail-head">
       <a class="back-link" href="./logs.html">← 세션 목록</a>
       <h2>${esc(s.title||s.session_key||s.id)}</h2>
-      <a class="source-link" href="${esc(s.canonical_url||s.raw_url||"#")}" target="_blank" rel="noopener">YouTube에서 열기</a>
+      ${sourceLinkHtml(s,"YouTube에서 열기")}
       <div class="session-meta"><span>문장 ${Number(s.sentence_count||0)}개</span><span>단어 ${Number(s.word_count||0)}개</span><span>마지막 저장 ${esc(fmtDate(s.last_used_at))}</span></div>
       <div class="actions">
-        <button class="btn" id="renameSession">세션명 변경</button>
         <button class="btn" id="exportSession" data-apkg>이 세션 APKG 내보내기</button>
+        <button class="btn" id="editSession">세션명 변경</button>
         <button class="btn danger" id="deleteSession">세션 삭제</button>
       </div>
     </section>
@@ -300,32 +347,124 @@ async function loadDetail(sessionId){
       <button class="filter active" data-filter="all">전체 ${currentItems.length}</button>
       <button class="filter" data-filter="sentence">문장 ${Number(s.sentence_count||0)}</button>
       <button class="filter" data-filter="word">단어 ${Number(s.word_count||0)}</button>
+      <button class="btn selection-toggle" id="selectionToggle" type="button">선택</button>
     </div>
     <section id="itemList" class="item-list">${currentItems.length?currentItems.map(itemSummary).join(""):"<div class=empty>저장된 카드가 없습니다.</div>"}</section>`;
 
   document.getElementById("exportSession")?.addEventListener("click",()=>exportApkg(s.id,s.title||"Session"));
-  document.getElementById("renameSession")?.addEventListener("click",()=>renameSession(s.id,s.title||""));
+  document.getElementById("editSession")?.addEventListener("click",()=>editSessionFlow(s));
   document.getElementById("deleteSession")?.addEventListener("click",()=>removeSession(s.id,true));
+  document.getElementById("selectionToggle")?.addEventListener("click",()=>setSelectionMode(!selectionMode));
   for(const btn of document.querySelectorAll(".filter")){
     btn.addEventListener("click",()=>{
+      currentFilter=btn.dataset.filter;
       document.querySelectorAll(".filter").forEach(b=>b.classList.toggle("active",b===btn));
-      const f=btn.dataset.filter;
-      document.querySelectorAll(".item-row").forEach(card=>card.hidden=f!=="all"&&card.dataset.kind!==f);
+      document.querySelectorAll(".item-row").forEach(card=>card.hidden=currentFilter!=="all"&&card.dataset.kind!==currentFilter);
+      updateBulkBar();
     });
   }
 }
 
-async function renameSession(id,currentTitle){
-  const title=prompt("새 세션명을 입력하세요.",currentTitle||"");
-  if(title==null) return;
-  const trimmed=title.trim();
-  if(!trimmed) return alert("세션명은 비워둘 수 없습니다.");
-  await api(`/api/sessions/${encodeURIComponent(id)}`,{
+function renderExistingSessions(excludeIds=[]){
+  const q=existingSearch.value.trim().toLocaleLowerCase("ko-KR");
+  const excluded=new Set(excludeIds);
+  const list=sessionsCache.filter(s=>!excluded.has(s.id)).filter(s=>{
+    if(!q) return true;
+    return [s.title,s.canonical_url,s.raw_url,s.session_key].some(v=>String(v||"").toLocaleLowerCase("ko-KR").includes(q));
+  });
+  existingList.innerHTML=list.length?list.map(s=>`
+    <button class="existing-item" type="button" data-existing-id="${esc(s.id)}">
+      <strong>${esc(s.title||s.session_key||s.id)}</strong>
+      <small>${esc(s.canonical_url||s.raw_url||"링크 없음")}</small>
+    </button>`).join(""):"<div class=empty>선택할 세션이 없습니다.</div>";
+}
+
+async function openSessionDialog({title,initial="",excludeIds=[]}={}){
+  sessionDlgTitle.textContent=title||"세션 선택";
+  sessionInput.value=initial||"";
+  sessionDlgHint.textContent="세션명 또는 YouTube 링크를 입력하세요. 같은 이름이나 링크가 있으면 자동으로 병합합니다.";
+  existingPanel.hidden=true;
+  existingSearch.value="";
+  existingList.innerHTML="";
+
+  return new Promise(resolve=>{
+    let done=false;
+    const finish=value=>{
+      if(done) return;
+      done=true;
+      cleanup();
+      if(sessionDlg.open) sessionDlg.close();
+      resolve(value);
+    };
+    const onPaste=async()=>{
+      try{
+        const text=await navigator.clipboard?.readText?.();
+        if(text) sessionInput.value=text.trim();
+        sessionInput.focus();
+      }catch(e){ sessionDlgHint.textContent=`붙여넣기 실패: ${e.message||e}`; }
+    };
+    const onExisting=async()=>{
+      existingPanel.hidden=!existingPanel.hidden;
+      if(existingPanel.hidden) return;
+      existingList.innerHTML="<div class=loading-text>기존 세션을 불러오는 중…</div>";
+      try{
+        const out=await api("/api/sessions/recent");
+        sessionsCache=out.sessions||[];
+        renderExistingSessions(excludeIds);
+        existingSearch.focus();
+      }catch(e){
+        existingList.innerHTML=`<div class="error">세션 목록 오류: ${esc(e.message||e)}</div>`;
+      }
+    };
+    const onExistingSearch=()=>renderExistingSessions(excludeIds);
+    const onExistingClick=e=>{
+      const b=e.target.closest("[data-existing-id]");
+      if(b) finish({target_session_id:b.dataset.existingId});
+    };
+    const onConfirm=()=>{
+      const input=sessionInput.value.trim();
+      if(!input){ sessionDlgHint.textContent="세션명 또는 YouTube 링크를 입력하세요."; return; }
+      finish({input});
+    };
+    const onCancel=()=>finish(null);
+    const onClose=()=>finish(null);
+    const cleanup=()=>{
+      sessionPaste.removeEventListener("click",onPaste);
+      sessionExisting.removeEventListener("click",onExisting);
+      existingSearch.removeEventListener("input",onExistingSearch);
+      existingList.removeEventListener("click",onExistingClick);
+      sessionConfirm.removeEventListener("click",onConfirm);
+      sessionCancel.removeEventListener("click",onCancel);
+      sessionDlg.removeEventListener("close",onClose);
+    };
+    sessionPaste.addEventListener("click",onPaste);
+    sessionExisting.addEventListener("click",onExisting);
+    existingSearch.addEventListener("input",onExistingSearch);
+    existingList.addEventListener("click",onExistingClick);
+    sessionConfirm.addEventListener("click",onConfirm);
+    sessionCancel.addEventListener("click",onCancel);
+    sessionDlg.addEventListener("close",onClose,{once:true});
+    sessionDlg.showModal();
+    sessionInput.focus();
+    sessionInput.select();
+  });
+}
+
+async function editSessionFlow(session){
+  const spec=await openSessionDialog({
+    title:"세션명·YouTube 링크 변경 / 병합",
+    initial:session.title||"",
+    excludeIds:[session.id]
+  });
+  if(!spec) return;
+  const out=await api(`/api/sessions/${encodeURIComponent(session.id)}`,{
     method:"PATCH",
     headers:{"content-type":"application/json"},
-    body:JSON.stringify({title:trimmed})
+    body:JSON.stringify(spec)
   });
-  await loadCurrent();
+  const targetId=out?.session?.id || out?.target_session_id || session.id;
+  if(sessionIdFromUrl()) location.href=`./logs.html?session=${encodeURIComponent(targetId)}`;
+  else await loadCurrent();
 }
 
 async function removeSession(id,fromDetail=false){
@@ -342,45 +481,136 @@ async function removeAll(){
     await api("/api/all",{method:"DELETE"});
     setStatus("전체 학습로그를 삭제했습니다.");
     await loadCurrent();
-  }finally{
-    deleteAll.disabled=false;
-  }
+  }finally{ deleteAll.disabled=false; }
 }
 
-async function removeItem(id){
-  if(!confirm("이 항목을 삭제할까요? 같은 사진을 사용하는 다른 항목이 있으면 사진은 유지됩니다.")) return;
-  await api(`/api/items/${encodeURIComponent(id)}`,{method:"DELETE"});
+function groupKey(item){
+  if(item.context_group_id) return `ctx:${item.context_group_id}`;
+  if(item.source_image_id||item.source_text) return `legacy:${item.source_image_id||""}|${item.source_text||""}`;
+  return "";
+}
+
+function linkedExtraIds(ids){
+  const selected=new Set(ids);
+  const extras=new Set();
+  for(const id of selected){
+    const item=currentItems.find(v=>v.id===id);
+    if(!item) continue;
+    const key=groupKey(item);
+    if(!key) continue;
+    for(const other of currentItems){
+      if(other.id===item.id||selected.has(other.id)) continue;
+      if(other.item_type===item.item_type) continue;
+      if(groupKey(other)===key) extras.add(other.id);
+    }
+  }
+  return [...extras];
+}
+
+function askLinked(action,count){
+  if(!count) return Promise.resolve("only");
+  choiceTitle.textContent=action==="move"?"연결 항목 이동":"연결 항목 삭제";
+  choiceMessage.textContent=`선택하지 않은 연결 문장·단어가 ${count}개 있습니다. 함께 ${action==="move"?"이동":"삭제"}할까요?`;
+  choiceOnly.textContent="선택한 항목만";
+  choiceTogether.textContent="연결 항목도 함께";
+  return new Promise(resolve=>{
+    let done=false;
+    const finish=v=>{
+      if(done) return;
+      done=true;
+      cleanup();
+      if(choiceDlg.open) choiceDlg.close();
+      resolve(v);
+    };
+    const onCancel=()=>finish("cancel");
+    const onOnly=()=>finish("only");
+    const onTogether=()=>finish("together");
+    const onClose=()=>finish("cancel");
+    const cleanup=()=>{
+      choiceCancel.removeEventListener("click",onCancel);
+      choiceOnly.removeEventListener("click",onOnly);
+      choiceTogether.removeEventListener("click",onTogether);
+      choiceDlg.removeEventListener("close",onClose);
+    };
+    choiceCancel.addEventListener("click",onCancel);
+    choiceOnly.addEventListener("click",onOnly);
+    choiceTogether.addEventListener("click",onTogether);
+    choiceDlg.addEventListener("close",onClose,{once:true});
+    choiceDlg.showModal();
+  });
+}
+
+async function resolveLinkedSelection(ids,action){
+  const base=[...new Set(ids)].filter(Boolean);
+  const extras=linkedExtraIds(base);
+  if(!extras.length) return base;
+  const choice=await askLinked(action,extras.length);
+  if(choice==="cancel") return null;
+  return choice==="together" ? [...new Set([...base,...extras])] : base;
+}
+
+async function moveItems(ids){
+  ids=await resolveLinkedSelection(ids,"move");
+  if(!ids||!ids.length) return;
+  const spec=await openSessionDialog({title:`${ids.length}개 항목 이동`,excludeIds:[currentSession?.id].filter(Boolean)});
+  if(!spec) return;
+  await api("/api/items/batch-move",{
+    method:"POST",
+    headers:{"content-type":"application/json"},
+    body:JSON.stringify({item_ids:ids,...spec})
+  });
   await loadDetail(currentSession.id);
 }
 
-async function openMoveDialog(id){
-  movingItemId=id;
-  const out=await api("/api/sessions/recent");
-  sessionsCache=out.sessions||[];
-  const choices=sessionsCache.filter(s=>s.id!==currentSession?.id);
-  if(!choices.length){
-    alert("이동할 다른 세션이 없습니다.");
-    return;
-  }
-  moveTarget.innerHTML=choices.map(s=>`<option value="${esc(s.id)}">${esc(s.title||s.session_key||s.id)}</option>`).join("");
-  moveDlg.showModal();
+async function deleteItems(ids){
+  ids=await resolveLinkedSelection(ids,"delete");
+  if(!ids||!ids.length) return;
+  if(!confirm(`${ids.length}개 항목을 삭제합니다. 이 작업은 되돌릴 수 없습니다.\n\n계속할까요?`)) return;
+  await api("/api/items/batch-delete",{
+    method:"POST",
+    headers:{"content-type":"application/json"},
+    body:JSON.stringify({item_ids:ids})
+  });
+  await loadDetail(currentSession.id);
 }
 
-async function confirmMove(){
-  if(!movingItemId||!moveTarget.value) return;
-  moveOk.disabled=true;
-  try{
-    await api(`/api/items/${encodeURIComponent(movingItemId)}`,{
-      method:"PATCH",
-      headers:{"content-type":"application/json"},
-      body:JSON.stringify({session_id:moveTarget.value})
-    });
-    moveDlg.close();
-    await loadDetail(currentSession.id);
-  }finally{
-    moveOk.disabled=false;
-    movingItemId="";
-  }
+function visibleItemIds(){
+  return [...document.querySelectorAll(".item-row")].filter(row=>!row.hidden).map(row=>row.dataset.itemId);
+}
+
+function setSelectionMode(on){
+  selectionMode=Boolean(on);
+  if(!selectionMode) selectedIds.clear();
+  document.getElementById("itemList")?.classList.toggle("selection-mode",selectionMode);
+  const btn=document.getElementById("selectionToggle");
+  if(btn) btn.textContent=selectionMode?"선택 종료":"선택";
+  document.querySelectorAll(".item-detail").forEach(d=>{if(selectionMode)d.hidden=true;});
+  document.querySelectorAll(".item-row").forEach(r=>r.classList.toggle("expanded",false));
+  updateSelectionUi();
+}
+
+function toggleSelected(id){
+  if(selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
+  updateSelectionUi();
+}
+
+function updateSelectionUi(){
+  document.querySelectorAll(".item-row").forEach(row=>{
+    const on=selectedIds.has(row.dataset.itemId);
+    row.classList.toggle("selected",on);
+    row.querySelector(".select-mark")?.setAttribute("aria-pressed",String(on));
+  });
+  updateBulkBar();
+}
+
+function updateBulkBar(){
+  bulkBar.hidden=!selectionMode;
+  bulkCount.textContent=`${selectedIds.size}개 선택`;
+  bulkMove.disabled=selectedIds.size===0;
+  bulkDelete.disabled=selectedIds.size===0;
+  const visible=visibleItemIds();
+  const allVisible=visible.length>0&&visible.every(id=>selectedIds.has(id));
+  bulkSelectAll.textContent=allVisible?"전체 해제":"전체 선택";
 }
 
 function closeMenus(except=null){
@@ -399,8 +629,7 @@ async function loadCurrent(){
     const id=sessionIdFromUrl();
     exportAll.hidden=Boolean(id);
     deleteAll.hidden=Boolean(id);
-    if(id) await loadDetail(id);
-    else await loadOverview();
+    if(id) await loadDetail(id); else await loadOverview();
   }catch(e){
     console.error(e);
     mainView.innerHTML=`<div class="error">오류: ${esc(e.message||e)}</div>`;
@@ -413,11 +642,14 @@ mainView.addEventListener("click",async e=>{
   if(sessionCard&&sessionAct){
     const id=sessionCard.dataset.id;
     const title=sessionCard.dataset.title||"";
-    if(sessionAct.dataset.sessionAct==="rename") await renameSession(id,title);
     if(sessionAct.dataset.sessionAct==="export") await exportApkg(id,title);
+    if(sessionAct.dataset.sessionAct==="edit") await editSessionFlow(sessionsCache.find(s=>s.id===id)||{id,title});
     if(sessionAct.dataset.sessionAct==="delete") await removeSession(id,false);
     return;
   }
+
+  const selectBtn=e.target.closest("[data-select-item]");
+  if(selectBtn){ e.stopPropagation(); toggleSelected(selectBtn.dataset.selectItem); return; }
 
   const more=e.target.closest(".more-btn");
   if(more){
@@ -436,21 +668,18 @@ mainView.addEventListener("click",async e=>{
     e.stopPropagation();
     const row=itemAct.closest(".item-row");
     closeMenus();
-    if(itemAct.dataset.itemAct==="delete") await removeItem(row.dataset.itemId);
-    if(itemAct.dataset.itemAct==="move") await openMoveDialog(row.dataset.itemId);
+    if(itemAct.dataset.itemAct==="delete") await deleteItems([row.dataset.itemId]);
+    if(itemAct.dataset.itemAct==="move") await moveItems([row.dataset.itemId]);
     return;
   }
 
   const openMedia=e.target.closest("[data-open-media]");
-  if(openMedia){
-    e.stopPropagation();
-    await showImage(openMedia.dataset.openMedia,openMedia.dataset.bbox||"");
-    return;
-  }
+  if(openMedia){ e.stopPropagation(); await showImage(openMedia.dataset.openMedia,openMedia.dataset.bbox||""); return; }
 
   const summary=e.target.closest(".item-summary");
   if(summary){
     const row=summary.closest(".item-row");
+    if(selectionMode){ toggleSelected(row.dataset.itemId); return; }
     const detail=row.querySelector(".item-detail");
     const opening=detail.hidden;
     detail.hidden=!opening;
@@ -462,20 +691,24 @@ mainView.addEventListener("click",async e=>{
 
 mainView.addEventListener("keydown",e=>{
   if((e.key==="Enter"||e.key===" ")&&e.target.classList.contains("item-summary")){
-    e.preventDefault();
-    e.target.click();
+    e.preventDefault(); e.target.click();
   }
 });
 
-document.addEventListener("click",e=>{
-  if(!e.target.closest(".more-wrap")) closeMenus();
-});
-
+document.addEventListener("click",e=>{ if(!e.target.closest(".more-wrap")) closeMenus(); });
 imageModalClose.addEventListener("click",closeImageModal);
 imageModal.addEventListener("click",e=>{if(e.target===imageModal) closeImageModal();});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&imageModal.open) closeImageModal();});
-moveCancel.addEventListener("click",()=>moveDlg.close());
-moveOk.addEventListener("click",confirmMove);
+
+bulkSelectAll.addEventListener("click",()=>{
+  const ids=visibleItemIds();
+  const all=ids.length&&ids.every(id=>selectedIds.has(id));
+  for(const id of ids){ if(all) selectedIds.delete(id); else selectedIds.add(id); }
+  updateSelectionUi();
+});
+bulkMove.addEventListener("click",()=>moveItems([...selectedIds]));
+bulkDelete.addEventListener("click",()=>deleteItems([...selectedIds]));
+bulkCancel.addEventListener("click",()=>setSelectionMode(false));
 
 saveBase.addEventListener("click",()=>{setLogWorkerBase(workerBase.value.trim());loadCurrent();});
 setToken.addEventListener("click",()=>{

@@ -208,7 +208,7 @@ function kanjiHtml(raw){
   let arr=[];
   try{ arr=JSON.parse(raw || "[]"); }catch{}
   if(!Array.isArray(arr) || !arr.length) return "";
-  return arr.map(k=>`${esc(k.char||"")} — 音: ${esc(k.onyomi||"")} / 訓: ${esc(k.kunyomi||"")} / 뜻: ${esc(k.meaning_ko||"")}`).join("<br>");
+  return arr.map(k=>`<div><b style="font-size:1.18em">${esc(k.char||"")}</b>　<b>${esc(k.meaning_ko||"정보 없음")}</b>　<span style="font-size:.82em;border:1px solid #999;border-radius:4px;padding:1px 4px">音</span> ${esc(k.onyomi||"-")}　<span style="font-size:.82em;border:1px solid #999;border-radius:4px;padding:1px 4px">訓</span> ${esc(k.kunyomi||"-")}</div>`).join("");
 }
 
 function imageHtml(item){
