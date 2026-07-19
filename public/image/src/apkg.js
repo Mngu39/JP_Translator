@@ -48,7 +48,9 @@ const CARD_CSS = `
   max-width: 760px;
   margin: 0 auto;
 }
-.jp-main { font-size: 27px; font-weight: 650; line-height: 1.55; }
+.jp-main { font-size: 27px; font-weight: 650; line-height: 1.8; }
+ruby { ruby-position: over; }
+rt { font-size: .5em; color: #666; font-weight: 500; }
 .jp-word { font-size: 34px; font-weight: 750; }
 .reading { color: #5f6368; font-size: 19px; margin-top: 2px; }
 .translation { font-size: 21px; font-weight: 650; margin: 12px 0; }
@@ -82,6 +84,22 @@ const WORD_TEMPLATE = {
 
 function esc(s){
   return String(s ?? "").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+
+function hasKanji(s){ return /[\u3400-\u9fff]/.test(String(s||"")); }
+
+function sentenceHtml(item){
+  let tokens=[];
+  try{ tokens=JSON.parse(item.source_furigana_json || "[]"); }catch{}
+  if(!Array.isArray(tokens) || !tokens.length) return esc(item.source_text || "");
+  return tokens.map(t=>{
+    const surface=String(t?.surface||"");
+    const reading=String(t?.reading||"");
+    return hasKanji(surface) && reading
+      ? `<ruby lang="ja">${esc(surface)}<rt>${esc(reading)}</rt></ruby>`
+      : esc(surface);
+  }).join("");
 }
 
 function safeUrl(s){
@@ -229,7 +247,7 @@ function noteFields(item){
     sort:String(item.source_text || ""),
     fields:[
       esc(item.id),
-      esc(item.source_text || ""),
+      sentenceHtml(item),
       esc(item.source_translation || item.ui_translation || ""),
       esc(item.word_explanation || ""),
       image,

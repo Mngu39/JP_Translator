@@ -13,7 +13,7 @@ import {
   resolveSession,
   saveItem,
   downscaleImageElement,
-} from "./log.js?v=20260719-v4";
+} from "./log.js?v=20260719-v6";
 
 const stage     = document.getElementById("stage");
 const imgEl     = document.getElementById("img");
@@ -65,6 +65,8 @@ let inTokenView = false;
 let currentImageId = "";
 let currentSentenceText = "";
 let currentSentenceTranslation = "";
+let currentSentenceFuriganaTokens = [];
+let currentSentenceFuriganaPromise = Promise.resolve([]);
 
 // ===== Kanji DBs =====
 let KANJI = {};            // attr
@@ -567,10 +569,32 @@ function renderFuriganaTokens(container, tokens){
   });
 }
 
+function normalizeSentenceFurigana(rubi, text){
+  const tokens = (rubi?.tokens || rubi?.result || rubi?.morphs || rubi?.morphemes || [])
+    .map(t=>({
+      surface: t.surface || t.text || "",
+      reading: kataToHira(t.reading || t.read || t.kana || ""),
+      lemma: t.lemma || t.base || t.baseform || t.dict || (t.surface || t.text || "")
+    }))
+    .filter(t=>t.surface);
+
+  let cursor = 0;
+  for(const t of tokens){
+    const pos = text.indexOf(t.surface, cursor);
+    const start = pos >= 0 ? pos : cursor;
+    t.start = start;
+    t.end = start + t.surface.length;
+    cursor = t.end;
+  }
+  return tokens;
+}
+
 // 메인 팝업 실제 렌더
 async function openMainPopover(anchor, text){
   currentSentenceText = text || "";
   currentSentenceTranslation = "";
+  currentSentenceFuriganaTokens = [];
+  currentSentenceFuriganaPromise = getFurigana(text).then(r=>normalizeSentenceFurigana(r, text));
   pop.hidden = false;
   showSentenceView();
   setGhost(false);
@@ -591,32 +615,11 @@ async function openMainPopover(anchor, text){
 
   // 실제 후리가나 / 번역
   try{
-    const [rubi, tr] = await Promise.all([
-      getFurigana(text),
+    const [tokens, tr] = await Promise.all([
+      currentSentenceFuriganaPromise,
       translateJaKo(text)
     ]);
-
-    const tokens = (rubi?.tokens ||
-                    rubi?.result ||
-                    rubi?.morphs ||
-                    rubi?.morphemes || [])
-      .map(t=>({
-        surface: t.surface || t.text || "",
-        reading: kataToHira(t.reading || t.read || t.kana || ""),
-        lemma:   t.lemma || t.base || t.baseform ||
-                 t.dict || (t.surface||t.text||"")
-      }))
-      .filter(t=>t.surface);
-
-    // Anki 강조용: 토큰이 원문 내 어느 위치에 있었는지 저장한다.
-    let cursor = 0;
-    for(const t of tokens){
-      const pos = text.indexOf(t.surface, cursor);
-      const start = pos >= 0 ? pos : cursor;
-      t.start = start;
-      t.end = start + t.surface.length;
-      cursor = t.end;
-    }
+    currentSentenceFuriganaTokens = tokens;
 
     if(tokens.length){
       renderFuriganaTokens(rubyLine, tokens);
@@ -828,10 +831,34 @@ function currentTokenPayload(){
   };
 }
 
+function currentSourceBbox(){
+  const nw = Number(imgEl.naturalWidth || 0);
+  const nh = Number(imgEl.naturalHeight || 0);
+  const selected = selectedIdxs.map(i=>annos[i]).filter(Boolean);
+  if(!nw || !nh || !selected.length) return null;
+  const points = selected.flatMap(a=>Array.isArray(a.polygon) ? a.polygon : []);
+  if(!points.length) return null;
+  const xs = points.map(p=>Number(p?.[0] || 0));
+  const ys = points.map(p=>Number(p?.[1] || 0));
+  const left = Math.max(0, Math.min(...xs));
+  const top = Math.max(0, Math.min(...ys));
+  const right = Math.min(nw, Math.max(...xs));
+  const bottom = Math.min(nh, Math.max(...ys));
+  if(right <= left || bottom <= top) return null;
+  return {
+    x:left / nw,
+    y:top / nh,
+    width:(right - left) / nw,
+    height:(bottom - top) / nh
+  };
+}
+
 async function buildSavePayload(itemType, session){
   if(!currentSentenceText.trim()) throw new Error("저장할 원문이 없습니다.");
 
   const shot = await downscaleImageElement(imgEl, { longEdge:1600, quality:0.78 });
+  const furiganaTokens = await currentSentenceFuriganaPromise.catch(()=>currentSentenceFuriganaTokens || []);
+  const bbox = currentSourceBbox();
   const base = {
     session_id: session.id,
     item_type: itemType,
@@ -841,6 +868,8 @@ async function buildSavePayload(itemType, session){
     source_image_id: currentImageId || "",
     source_image_url: imgEl.currentSrc || imgEl.src || "",
     screenshot: shot,
+    source_furigana_json: furiganaTokens?.length ? JSON.stringify(furiganaTokens.map(t=>({surface:t.surface,reading:t.reading||""}))) : null,
+    source_bbox_json: bbox ? JSON.stringify(bbox) : null,
     page_url: location.href,
     created_tz_offset_min: new Date().getTimezoneOffset(),
   };
