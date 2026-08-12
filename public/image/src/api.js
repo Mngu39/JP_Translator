@@ -71,6 +71,20 @@ export async function translateJaKo(text){
   return { text: out, result: out };
 }
 
+
+// AI 문맥 재구성: 번역/요미가나/학습 단위 경계를 한 번에 보정
+export async function restructureJa(text,{deeplTranslation="",morphs=[]}={}){
+  const r=await fetch(`${getWorkerBase()}/run/restructure`,{
+    method:"POST",
+    headers:authHeaders({"content-type":"application/json"}),
+    body:JSON.stringify({text,deepl_translation:deeplTranslation,morphs})
+  });
+  const raw=await r.text().catch(()=>"");
+  let j={}; try{j=raw?JSON.parse(raw):{};}catch{}
+  if(!r.ok) throw new Error(j?.error?`${j.error}${j.detail?`: ${j.detail}`:""}`:`AI ${r.status}: ${raw.slice(0,240)}`);
+  return j;
+}
+
 export function openNaverJaLemma(term){
   window.open(`https://ja.dict.naver.com/#/search?range=all&query=${encodeURIComponent(term)}`,"_blank");
 }

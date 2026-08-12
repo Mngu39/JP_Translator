@@ -6,6 +6,7 @@ import {
   ensureLogConfig
 } from "./log.js";
 import { createAnkiApkg } from "./apkg.js";
+import { loadUsageData, buildKanjiUsage, enrichSourceTokens } from "./kanji_usage.js";
 
 const workerBase=document.getElementById("workerBase");
 const saveBase=document.getElementById("saveBase");
@@ -38,6 +39,24 @@ const choiceMessage=document.getElementById("choiceMessage");
 const choiceCancel=document.getElementById("choiceCancel");
 const choiceOnly=document.getElementById("choiceOnly");
 const choiceTogether=document.getElementById("choiceTogether");
+const wordInfoDlg=document.getElementById("wordInfoDlg");
+const wordInfoTitle=document.getElementById("wordInfoTitle");
+const wordInfoBody=document.getElementById("wordInfoBody");
+const wordInfoClose=document.getElementById("wordInfoClose");
+
+const editItemDlg=document.getElementById("editItemDlg");
+const editItemTitle=document.getElementById("editItemTitle");
+const editSourceText=document.getElementById("editSourceText");
+const editUiTranslation=document.getElementById("editUiTranslation");
+const editWordFields=document.getElementById("editWordFields");
+const editTargetWord=document.getElementById("editTargetWord");
+const editTargetSurface=document.getElementById("editTargetSurface");
+const editTargetReading=document.getElementById("editTargetReading");
+const editSourceTranslation=document.getElementById("editSourceTranslation");
+const editWordTranslation=document.getElementById("editWordTranslation");
+const editWordExplanation=document.getElementById("editWordExplanation");
+const editItemCancel=document.getElementById("editItemCancel");
+const editItemSave=document.getElementById("editItemSave");
 
 const bulkBar=document.getElementById("bulkBar");
 const bulkCount=document.getElementById("bulkCount");
@@ -53,7 +72,6 @@ let sessionsCache=[];
 let selectionMode=false;
 let selectedIds=new Set();
 let currentFilter="all";
-let kanjiDbPromise=null;
 
 function esc(s){
   return String(s ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -119,42 +137,30 @@ function sessionIdFromUrl(){ return new URL(location.href).searchParams.get("ses
 function setStatus(message){ exportStatus.textContent=message || ""; }
 function setExportBusy(busy){ for(const btn of document.querySelectorAll("[data-apkg],#exportAll")) btn.disabled=busy; }
 
-function kanjiDbUrl(){
-  return location.pathname.includes("/image/")
-    ? "../text/kanji_ko_attr_irreg.min.json?v=20260719-v7"
-    : "./text/kanji_ko_attr_irreg.min.json?v=20260719-v7";
-}
-
-async function loadKanjiDb(){
-  if(!kanjiDbPromise){
-    kanjiDbPromise=fetch(kanjiDbUrl(),{cache:"no-store"})
-      .then(r=>r.ok?r.json():{})
-      .catch(()=>({}));
-  }
-  return kanjiDbPromise;
-}
-
 function parseJson(raw,fallback=null){
   try{return JSON.parse(raw);}catch{return fallback;}
 }
 
-async function enrichKanjiJson(raw){
-  const db=await loadKanjiDb();
-  const arr=parseJson(raw,[]);
-  if(!Array.isArray(arr)) return "[]";
-  return JSON.stringify(arr.map(k=>{
-    const ch=String(k?.char||"");
-    const rec=db?.[ch]||{};
-    const ko=String(rec["훈음"] || [rec["훈"],rec["음"]].filter(Boolean).join(" ") || "").trim();
-    return {char:ch,onyomi:String(k?.onyomi||""),kunyomi:String(k?.kunyomi||""),meaning_ko:ko};
+async function enrichItems(items){
+  return Promise.all((items||[]).map(async item=>{
+    const tokens=await enrichSourceTokens(item.source_furigana_json);
+    const target=item.target_surface||item.target_word||"";
+    const wordKanji=item.item_type==="kanji_box" ? await buildKanjiUsage(target,item.target_word_reading||"") : [];
+    return {
+      ...item,
+      source_furigana_json:tokens.length?JSON.stringify(tokens):item.source_furigana_json,
+      kanji_json:item.item_type==="kanji_box"?JSON.stringify(wordKanji):"[]"
+    };
   }));
 }
 
-async function enrichItems(items){
-  return Promise.all((items||[]).map(async item=>({
-    ...item,
-    kanji_json:item.item_type==="kanji_box" ? await enrichKanjiJson(item.kanji_json) : "[]"
-  })));
+async function refreshUsageFooter(){
+  try{
+    const data=await loadUsageData();
+    const meta=data?._meta||{};
+    const el=document.getElementById("jmdictDate");
+    if(el) el.textContent=meta.jmdict_date || (meta.generated_at?String(meta.generated_at).slice(0,10):"") || "업데이트 필요";
+  }catch{}
 }
 
 async function exportApkg(sessionId="",title=""){
@@ -180,15 +186,39 @@ async function exportApkg(sessionId="",title=""){
 
 function hasKanji(s){ return /[\u3400-\u9fff]/.test(String(s||"")); }
 
-function rubySource(text,raw){
+function usageHtml(arr){
+  if(!Array.isArray(arr)||!arr.length) return "";
+  return arr.map(k=>{
+    if(k?.unavailable){
+      return `<div class="kanji-row"><strong class="kanji-char">${esc(k.char||"")}</strong><span class="kanji-ko">${esc(k.meaning_ko||"정보 없음")}</span><span class="special-reading">읽기 사전 업데이트 필요</span></div>`;
+    }
+    if(k?.special){
+      return `<div class="kanji-row"><strong class="kanji-char">${esc(k.char||"")}</strong><span class="kanji-ko">${esc(k.meaning_ko||"정보 없음")}</span><span class="special-reading">${esc(k.word_reading||"")} · 특수 읽기</span></div>`;
+    }
+    const typ=k.reading_type==="on"?"音":k.reading_type==="kun"?"訓":"";
+    const ex=(k.examples||[]).map(v=>`${esc(v.word||"")}（${esc(v.reading||"")}）`).join(" · ");
+    return `<div class="kanji-row"><strong class="kanji-char">${esc(k.char||"")}</strong><span class="kanji-ko">${esc(k.meaning_ko||"정보 없음")}</span><span class="reading-group">${typ?`<span class="reading-badge">${typ}</span>`:""}<span>${esc(k.display_reading||k.used_reading||"")}</span></span>${ex?`<span class="kanji-examples">예: ${ex}</span>`:""}</div>`;
+  }).join("");
+}
+
+function tokenDataAttr(t){
+  const data={
+    surface:String(t?.surface||""),reading:String(t?.reading||""),lemma:String(t?.lemma||t?.surface||""),
+    meaning:String(t?.meaning||""),note:String(t?.note||""),kanji:Array.isArray(t?.kanji)?t.kanji:[]
+  };
+  return esc(encodeURIComponent(JSON.stringify(data)));
+}
+
+function rubySource(text,raw,clickable=true){
   const tokens=parseJson(raw,[]);
   if(!Array.isArray(tokens)||!tokens.length) return esc(text||"");
   return tokens.map(t=>{
     const surface=String(t?.surface||"");
     const reading=String(t?.reading||"");
-    return hasKanji(surface)&&reading
+    const body=hasKanji(surface)&&reading
       ? `<ruby lang="ja">${esc(surface)}<rt>${esc(reading)}</rt></ruby>`
       : esc(surface);
+    return clickable ? `<button type="button" class="source-token" data-token="${tokenDataAttr(t)}">${body}</button>` : body;
   }).join("");
 }
 
@@ -201,13 +231,7 @@ function rubyWord(word,reading){
 function kanjiLines(raw){
   const arr=parseJson(raw,[]);
   if(!Array.isArray(arr)||!arr.length) return "";
-  return `<div class="info-block"><div class="info-label">한자 정보</div>${arr.map(k=>`
-    <div class="kanji-row">
-      <strong class="kanji-char">${esc(k.char||"")}</strong>
-      <span class="kanji-ko">${esc(k.meaning_ko||"정보 없음")}</span>
-      <span class="reading-group"><span class="reading-badge">音</span><span>${esc(k.onyomi||"-")}</span></span>
-      <span class="reading-group"><span class="reading-badge">訓</span><span>${esc(k.kunyomi||"-")}</span></span>
-    </div>`).join("")}</div>`;
+  return `<div class="info-block"><div class="info-label">한자 정보</div>${usageHtml(arr)}</div>`;
 }
 
 function bboxData(item){
@@ -223,7 +247,7 @@ function itemSummary(item){
   const isWord=item.item_type==="kanji_box";
   const jp=isWord
     ? rubyWord(item.target_word||item.target_surface||"",item.target_word_reading||"")
-    : rubySource(item.source_text||"",item.source_furigana_json);
+    : rubySource(item.source_text||"",item.source_furigana_json,false);
   const meaning=isWord
     ? (item.word_translation||item.source_translation||item.ui_translation||"")
     : (item.source_translation||item.ui_translation||"");
@@ -236,6 +260,7 @@ function itemSummary(item){
       <div class="more-wrap">
         <button class="more-btn" type="button" aria-label="항목 메뉴" aria-expanded="false">⋯</button>
         <div class="more-menu" hidden>
+          <button type="button" data-item-act="edit">수정</button>
           <button type="button" data-item-act="move">이동</button>
           <button type="button" data-item-act="delete" class="danger-text">삭제</button>
         </div>
@@ -245,10 +270,11 @@ function itemSummary(item){
       ${item.media_id ? `<div class="shot loading" data-media-id="${esc(item.media_id)}" data-bbox="${bboxAttr(item)}">이미지 불러오는 중…</div>` : ""}
       ${isWord ? `
         <div class="info-block"><div class="info-label">원문</div><div class="jp-source" lang="ja">${rubySource(item.source_text||"",item.source_furigana_json)}</div><div class="ko-source">${esc(item.source_translation||item.ui_translation||"")}</div></div>
-        ${item.word_explanation ? `<div class="info-block"><div class="info-label">설명</div>${esc(item.word_explanation)}</div>` : ""}
+        ${item.word_explanation ? `<div class="info-block prewrap"><div class="info-label">설명</div>${esc(item.word_explanation)}</div>` : ""}
         ${kanjiLines(item.kanji_json)}
       ` : `
-        ${item.word_explanation ? `<div class="info-block"><div class="info-label">표현 설명</div>${esc(item.word_explanation)}</div>` : ""}
+        <div class="info-block"><div class="info-label">원문</div><div class="jp-source" lang="ja">${rubySource(item.source_text||"",item.source_furigana_json)}</div><div class="ko-source">${esc(item.source_translation||item.ui_translation||"")}</div></div>
+        ${item.word_explanation ? `<div class="info-block prewrap"><div class="info-label">표현 설명</div>${esc(item.word_explanation)}</div>` : ""}
       `}
       <div class="detail-meta">${esc(fmtDate(item.created_at))}</div>
     </div>
@@ -484,6 +510,68 @@ async function removeAll(){
   }finally{ deleteAll.disabled=false; }
 }
 
+async function showWordInfo(encoded){
+  let t={}; try{t=JSON.parse(decodeURIComponent(encoded||""));}catch{}
+  const surface=String(t.surface||"");
+  wordInfoTitle.textContent=surface || "단어 정보";
+  let meaning=String(t.meaning||"");
+  wordInfoBody.innerHTML=`<div class="word-info-reading" lang="ja">${rubyWord(surface,t.reading||"")}</div><div class="word-info-meaning">${meaning?esc(meaning):"뜻 불러오는 중…"}</div>${t.note?`<div class="info-block prewrap"><div class="info-label">설명</div>${esc(t.note)}</div>`:""}${t.kanji?.length?`<div class="info-block"><div class="info-label">한자 정보</div>${usageHtml(t.kanji)}</div>`:""}`;
+  wordInfoDlg.showModal();
+  if(!meaning && surface){
+    try{
+      const r=await api("/run/translate",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:t.lemma||surface,src:"JA",tgt:"KO",target:"KO"})});
+      meaning=String(r.translation||r.text||r.result||"");
+      const el=wordInfoBody.querySelector(".word-info-meaning"); if(el) el.textContent=meaning||"뜻 정보 없음";
+    }catch{
+      const el=wordInfoBody.querySelector(".word-info-meaning"); if(el) el.textContent="뜻 정보 없음";
+    }
+  }
+}
+
+async function editItemFlow(item){
+  if(!item) return;
+  const isWord=item.item_type==="kanji_box";
+  editItemTitle.textContent=isWord?"단어 항목 수정":"문장 항목 수정";
+  editSourceText.value=item.source_text||"";
+  editUiTranslation.value=item.ui_translation||"";
+  editSourceTranslation.value=item.source_translation||"";
+  editWordTranslation.value=item.word_translation||"";
+  editWordExplanation.value=item.word_explanation||"";
+  editTargetWord.value=item.target_word||"";
+  editTargetSurface.value=item.target_surface||"";
+  editTargetReading.value=item.target_word_reading||"";
+  editWordFields.hidden=!isWord;
+  editItemDlg.dataset.itemId=item.id;
+  editItemDlg.dataset.originalSource=item.source_text||"";
+  editItemDlg.showModal();
+}
+
+async function saveEditedItem(){
+  const id=editItemDlg.dataset.itemId||""; if(!id) return;
+  const item=currentItems.find(v=>v.id===id); if(!item) return;
+  editItemSave.disabled=true;
+  try{
+    const source=editSourceText.value.trim();
+    let sourceFurigana=item.source_furigana_json||null;
+    if(source && source!==String(editItemDlg.dataset.originalSource||"")){
+      try{
+        const fr=await api("/run/furigana",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source})});
+        const tokens=fr?.tokens||fr?.result||fr?.morphs||fr?.morphemes||[];
+        sourceFurigana=JSON.stringify(tokens.map(t=>({surface:t.surface||t.text||"",reading:t.reading||t.read||t.kana||"",lemma:t.lemma||t.base||t.surface||t.text||""})).filter(t=>t.surface));
+      }catch{ sourceFurigana=null; }
+    }
+    const body={
+      source_text:source,ui_translation:editUiTranslation.value.trim(),source_translation:editSourceTranslation.value.trim(),
+      word_translation:editWordTranslation.value.trim(),word_explanation:editWordExplanation.value.trim(),source_furigana_json:sourceFurigana
+    };
+    if(item.item_type==="kanji_box") Object.assign(body,{target_word:editTargetWord.value.trim(),target_surface:editTargetSurface.value.trim(),target_word_lemma:editTargetWord.value.trim(),target_word_reading:editTargetReading.value.trim()});
+    await api(`/api/items/${encodeURIComponent(id)}/edit`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+    editItemDlg.close();
+    await loadDetail(currentSession.id);
+  }catch(e){ alert(`항목 수정 실패: ${e.message||e}`); }
+  finally{editItemSave.disabled=false;}
+}
+
 function groupKey(item){
   if(item.context_group_id) return `ctx:${item.context_group_id}`;
   if(item.source_image_id||item.source_text) return `legacy:${item.source_image_id||""}|${item.source_text||""}`;
@@ -668,6 +756,7 @@ mainView.addEventListener("click",async e=>{
     e.stopPropagation();
     const row=itemAct.closest(".item-row");
     closeMenus();
+    if(itemAct.dataset.itemAct==="edit") await editItemFlow(currentItems.find(v=>v.id===row.dataset.itemId));
     if(itemAct.dataset.itemAct==="delete") await deleteItems([row.dataset.itemId]);
     if(itemAct.dataset.itemAct==="move") await moveItems([row.dataset.itemId]);
     return;
@@ -675,6 +764,9 @@ mainView.addEventListener("click",async e=>{
 
   const openMedia=e.target.closest("[data-open-media]");
   if(openMedia){ e.stopPropagation(); await showImage(openMedia.dataset.openMedia,openMedia.dataset.bbox||""); return; }
+
+  const sourceToken=e.target.closest(".source-token");
+  if(sourceToken){ e.stopPropagation(); await showWordInfo(sourceToken.dataset.token||""); return; }
 
   const summary=e.target.closest(".item-summary");
   if(summary){
@@ -699,6 +791,9 @@ document.addEventListener("click",e=>{ if(!e.target.closest(".more-wrap")) close
 imageModalClose.addEventListener("click",closeImageModal);
 imageModal.addEventListener("click",e=>{if(e.target===imageModal) closeImageModal();});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&imageModal.open) closeImageModal();});
+wordInfoClose?.addEventListener("click",()=>wordInfoDlg.close());
+editItemCancel?.addEventListener("click",()=>editItemDlg.close());
+editItemSave?.addEventListener("click",saveEditedItem);
 
 bulkSelectAll.addEventListener("click",()=>{
   const ids=visibleItemIds();
@@ -721,4 +816,5 @@ exportAll.addEventListener("click",()=>exportApkg());
 deleteAll.addEventListener("click",removeAll);
 
 window.addEventListener("beforeunload",clearMediaUrls);
+refreshUsageFooter();
 loadCurrent();

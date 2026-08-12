@@ -56,6 +56,11 @@ rt { font-size: .5em; color: #666; font-weight: 500; }
 .translation { font-size: 21px; font-weight: 650; margin: 12px 0; }
 .explanation, .kanji-info { margin-top: 12px; padding: 11px 13px; background: #f4f6f8; border-radius: 10px; }
 .example { margin-top: 14px; font-size: 20px; }
+.source-token { display:inline; border:0; background:transparent; color:inherit; padding:1px 2px; border-radius:4px; font:inherit; cursor:pointer; }
+.source-token:active { background:#e5e8ee; }
+.jp-token-popup { margin-top:10px; padding:10px 12px; border:1px solid #d9dde5; border-radius:9px; background:#f7f8fa; white-space:pre-wrap; font-size:14px; }
+.kanji-line { margin:5px 0; }
+.kanji-examples { display:block; margin-top:2px; color:#6b6f78; font-size:.88em; }
 .target { color: #c62828; font-weight: 750; }
 .shot img { display: block; max-width: 100%; max-height: 520px; object-fit: contain; margin: 14px auto; border-radius: 10px; }
 .source { margin-top: 13px; font-size: 12px; color: #777; overflow-wrap: anywhere; }
@@ -64,22 +69,25 @@ rt { font-size: .5em; color: #666; font-weight: 500; }
 hr { border: 0; border-top: 1px solid #ddd; margin: 18px 0; }
 .nightMode .card { color: #eee; background: #222; }
 .nightMode .explanation, .nightMode .kanji-info { background: #303238; }
+.nightMode .jp-token-popup { background:#303238; border-color:#555b67; }
 .nightMode .source { color: #aaa; }
 `;
+
+const TOKEN_SCRIPT = `<div id="jp-token-popup" class="jp-token-popup" hidden></div><script>(function(){var p=document.getElementById('jp-token-popup');document.querySelectorAll('.source-token').forEach(function(el){if(el.dataset.jpBound)return;el.dataset.jpBound='1';el.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation();try{var d=JSON.parse(decodeURIComponent(el.dataset.info||''));var lines=[d.surface+(d.reading?'（'+d.reading+'）':'')];if(d.meaning)lines.push(d.meaning);if(d.note)lines.push(d.note);if(d.kanji)lines.push(d.kanji);p.textContent=lines.join('\n');p.hidden=false;}catch(e){}});});})();<\/script>`;
 
 const SENTENCE_FIELDS = ["ID","Source","Translation","Explanation","Image","SourceTitle","SourceURL","SavedAt"];
 const WORD_FIELDS = ["ID","Word","Reading","Meaning","Explanation","Example","ExampleTranslation","Kanji","Image","SourceTitle","SourceURL","SavedAt"];
 
 const SENTENCE_TEMPLATE = {
   name:"Sentence Card",
-  qfmt:`<div class="jp-main" lang="ja">{{Source}}</div>{{Image}}<div class="source">{{SourceTitle}}</div>`,
+  qfmt:`<div class="jp-main" lang="ja">{{Source}}</div>${TOKEN_SCRIPT}{{Image}}<div class="source">{{SourceTitle}}</div>`,
   afmt:`{{FrontSide}}<hr id="answer"><div class="translation">{{Translation}}</div>{{#Explanation}}<div class="explanation">{{Explanation}}</div>{{/Explanation}}<div class="source">{{#SourceURL}}<a href="{{SourceURL}}">{{SourceTitle}}</a>{{/SourceURL}}{{^SourceURL}}{{SourceTitle}}{{/SourceURL}}<br>{{SavedAt}}</div>`
 };
 
 const WORD_TEMPLATE = {
   name:"Word Card",
-  qfmt:`<div class="jp-word" lang="ja">{{Word}}</div><div class="example" lang="ja">{{Example}}</div>{{Image}}<div class="source">{{SourceTitle}}</div>`,
-  afmt:`<div class="jp-word" lang="ja">{{Word}}</div>{{#Reading}}<div class="reading" lang="ja">{{Reading}}</div>{{/Reading}}<div class="translation">{{Meaning}}</div>{{#Explanation}}<div class="explanation">{{Explanation}}</div>{{/Explanation}}<hr><div class="label">Example</div><div class="example" lang="ja">{{Example}}</div><div>{{ExampleTranslation}}</div>{{#Kanji}}<div class="kanji-info">{{Kanji}}</div>{{/Kanji}}{{Image}}<div class="source">{{#SourceURL}}<a href="{{SourceURL}}">{{SourceTitle}}</a>{{/SourceURL}}{{^SourceURL}}{{SourceTitle}}{{/SourceURL}}<br>{{SavedAt}}</div>`
+  qfmt:`<div class="jp-word" lang="ja">{{Word}}</div><div class="example" lang="ja">{{Example}}</div>${TOKEN_SCRIPT}{{Image}}<div class="source">{{SourceTitle}}</div>`,
+  afmt:`<div class="jp-word" lang="ja">{{Word}}</div>{{#Reading}}<div class="reading" lang="ja">{{Reading}}</div>{{/Reading}}<div class="translation">{{Meaning}}</div>{{#Explanation}}<div class="explanation">{{Explanation}}</div>{{/Explanation}}<hr><div class="label">Example</div><div class="example" lang="ja">{{Example}}</div>${TOKEN_SCRIPT}<div>{{ExampleTranslation}}</div>{{#Kanji}}<div class="kanji-info">{{Kanji}}</div>{{/Kanji}}{{Image}}<div class="source">{{#SourceURL}}<a href="{{SourceURL}}">{{SourceTitle}}</a>{{/SourceURL}}{{^SourceURL}}{{SourceTitle}}{{/SourceURL}}<br>{{SavedAt}}</div>`
 };
 
 function esc(s){
@@ -89,16 +97,38 @@ function esc(s){
 
 function hasKanji(s){ return /[\u3400-\u9fff]/.test(String(s||"")); }
 
-function sentenceHtml(item){
+function tokenKanjiText(t){
+  const arr=Array.isArray(t?.kanji)?t.kanji:[];
+  return arr.map(k=>{
+    if(k?.special) return `${k.char||""} ${k.meaning_ko||"정보 없음"} · ${k.word_reading||""} (특수 읽기)`;
+    const typ=k.reading_type==="on"?"音":k.reading_type==="kun"?"訓":"";
+    const ex=(k.examples||[]).map(v=>`${v.word||""}（${v.reading||""}）`).join(" · ");
+    return `${k.char||""} ${k.meaning_ko||"정보 없음"} · ${k.display_reading||k.used_reading||""}${typ?`〔${typ}〕`:""}${ex?` · 예: ${ex}`:""}`;
+  }).join("\n");
+}
+
+function tokenInfoAttr(t){
+  const d={surface:String(t?.surface||""),reading:String(t?.reading||""),meaning:String(t?.meaning||""),note:String(t?.note||""),kanji:tokenKanjiText(t)};
+  return esc(encodeURIComponent(JSON.stringify(d)));
+}
+
+function sentenceHtml(item,{highlight=false}={}){
   let tokens=[];
   try{ tokens=JSON.parse(item.source_furigana_json || "[]"); }catch{}
   if(!Array.isArray(tokens) || !tokens.length) return esc(item.source_text || "");
+  const ts=Number(item.target_start_index), te=Number(item.target_end_index);
+  let cursor=0;
   return tokens.map(t=>{
     const surface=String(t?.surface||"");
     const reading=String(t?.reading||"");
-    return hasKanji(surface) && reading
+    const st=Number.isFinite(Number(t?.start))?Number(t.start):cursor;
+    const en=Number.isFinite(Number(t?.end))?Number(t.end):st+surface.length;
+    cursor=en;
+    const body=hasKanji(surface) && reading
       ? `<ruby lang="ja">${esc(surface)}<rt>${esc(reading)}</rt></ruby>`
       : esc(surface);
+    const hit=highlight && Number.isFinite(ts) && Number.isFinite(te) && st<te && en>ts;
+    return `<button type="button" class="source-token${hit?" target":""}" data-info="${tokenInfoAttr(t)}">${body}</button>`;
   }).join("");
 }
 
@@ -190,25 +220,26 @@ function defaultDconf(){
 }
 
 function highlightExample(item){
-  const source=String(item.source_text || "");
-  const start=Number(item.target_start_index);
-  const end=Number(item.target_end_index);
-  if(Number.isFinite(start) && Number.isFinite(end) && start>=0 && end>start && end<=source.length){
-    return `${esc(source.slice(0,start))}<span class="target">${esc(source.slice(start,end))}</span>${esc(source.slice(end))}`;
-  }
-  const target=String(item.target_surface || item.target_word || "");
-  const idx=target ? source.indexOf(target) : -1;
-  if(idx>=0){
-    return `${esc(source.slice(0,idx))}<span class="target">${esc(target)}</span>${esc(source.slice(idx+target.length))}`;
-  }
-  return esc(source);
+  const rich=sentenceHtml(item,{highlight:true});
+  if(rich) return rich;
+  return esc(item.source_text||"");
 }
 
 function kanjiHtml(raw){
   let arr=[];
   try{ arr=JSON.parse(raw || "[]"); }catch{}
   if(!Array.isArray(arr) || !arr.length) return "";
-  return arr.map(k=>`<div><b style="font-size:1.18em">${esc(k.char||"")}</b>　<b>${esc(k.meaning_ko||"정보 없음")}</b>　<span style="font-size:.82em;border:1px solid #999;border-radius:4px;padding:1px 4px">音</span> ${esc(k.onyomi||"-")}　<span style="font-size:.82em;border:1px solid #999;border-radius:4px;padding:1px 4px">訓</span> ${esc(k.kunyomi||"-")}</div>`).join("");
+  return arr.map(k=>{
+    if(k?.unavailable){
+      return `<div class="kanji-line"><b style="font-size:1.18em">${esc(k.char||"")}</b>　<b>${esc(k.meaning_ko||"정보 없음")}</b>　<span>읽기 사전 업데이트 필요</span></div>`;
+    }
+    if(k?.special){
+      return `<div class="kanji-line"><b style="font-size:1.18em">${esc(k.char||"")}</b>　<b>${esc(k.meaning_ko||"정보 없음")}</b>　<span>${esc(k.word_reading||"")} · 특수 읽기</span></div>`;
+    }
+    const typ=k.reading_type==="on"?"音":k.reading_type==="kun"?"訓":"";
+    const ex=(k.examples||[]).map(v=>`${esc(v.word||"")}（${esc(v.reading||"")}）`).join(" · ");
+    return `<div class="kanji-line"><b style="font-size:1.18em">${esc(k.char||"")}</b>　<b>${esc(k.meaning_ko||"정보 없음")}</b>　${typ?`<span style="font-size:.82em;border:1px solid #999;border-radius:4px;padding:1px 4px">${typ}</span> `:""}${esc(k.display_reading||k.used_reading||"")}${ex?`<span class="kanji-examples">예: ${ex}</span>`:""}</div>`;
+  }).join("");
 }
 
 function imageHtml(item){

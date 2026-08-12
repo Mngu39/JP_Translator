@@ -68,7 +68,8 @@
     .thumb-frame{position:relative;display:inline-block;width:min(260px,100%);padding:0;border:0;border-radius:10px;background:#0d0e11;overflow:hidden;cursor:zoom-in;}
     .thumb-frame img{display:block;width:100%;height:auto;max-height:190px;object-fit:contain;}
     .focus-box{position:absolute;border:3px solid #ff4051;background:rgba(255,64,81,.08);box-shadow:0 0 0 1px rgba(0,0,0,.55);pointer-events:none;}
-    .info-block{margin-top:10px;padding:11px 13px;background:#1b1c21;border-radius:10px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;}
+    .info-block{margin-top:10px;padding:11px 13px;background:#1b1c21;border-radius:10px;line-height:1.6;white-space:normal;overflow-wrap:anywhere;}
+    .info-block.prewrap{white-space:pre-wrap;}
     .info-label{color:#9297a2;font-size:11px;font-weight:750;letter-spacing:.06em;margin-bottom:4px;}
     .jp-source{font-size:18px;line-height:1.9;}
     .ko-source{margin-top:4px;color:#d1d3d8;}
@@ -77,6 +78,18 @@
     .kanji-ko{font-weight:700;color:#e7e8eb;}
     .reading-group{display:inline-flex;align-items:center;gap:6px;}
     .reading-badge{display:inline-grid;place-items:center;min-width:25px;height:22px;border-radius:6px;background:#303540;color:#cdd9ee;font-size:12px;font-weight:800;}
+    .kanji-examples{color:#aeb3bd;font-size:13px;}
+    .special-reading{color:#b9c7e5;font-size:13px;}
+    .source-token{border:0;background:transparent;color:inherit;padding:1px 2px;border-radius:5px;font:inherit;cursor:pointer;}
+    .source-token:hover{background:#2b2e37;}
+    .word-info-reading{font-size:25px;line-height:1.8;}
+    .word-info-meaning{margin-top:5px;font-size:17px;}
+    .edit-grid{display:grid;gap:9px;}
+    .edit-grid label{display:grid;gap:5px;color:#aeb1b9;font-size:12px;}
+    .edit-grid input,.edit-grid textarea{width:100%;padding:10px;background:#101116;color:#fff;border:1px solid #383c46;border-radius:9px;font:inherit;}
+    .edit-word-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
+    .site-foot{max-width:1180px;margin:20px auto 4px;color:#777b84;font-size:11px;text-align:center;}
+    .site-foot a{color:#9299aa;text-decoration:none}.site-foot a:hover{text-decoration:underline;}
     .detail-meta{margin-top:10px;color:#8f929a;font-size:12px;text-align:right;}
     mark{background:transparent;color:#ff777f;font-weight:800;}
     .loading-text,.empty,.error{padding:28px 10px;color:#a9abb3;text-align:center;}
@@ -88,8 +101,8 @@
     .modal-close{position:fixed;right:18px;top:16px;z-index:3;width:46px;height:46px;border:1px solid #565a65;border-radius:50%;background:#202228;color:#fff;font-size:30px;line-height:1;cursor:pointer;}
     .modal-frame{position:relative;display:inline-block;max-width:94vw;max-height:90vh;}
     .modal-frame img{display:block;max-width:94vw;max-height:90vh;width:auto;height:auto;object-fit:contain;border-radius:8px;}
-    .manage-dialog,.choice-dialog{width:min(620px,calc(100vw - 28px));border:1px solid #444853;border-radius:14px;background:#17181d;padding:18px;}
-    .manage-dialog h3,.choice-dialog h3{margin:0 0 12px;}
+    .manage-dialog,.choice-dialog,.word-info-dialog,.edit-item-dialog{width:min(620px,calc(100vw - 28px));border:1px solid #444853;border-radius:14px;background:#17181d;padding:18px;}
+    .manage-dialog h3,.choice-dialog h3,.word-info-dialog h3,.edit-item-dialog h3{margin:0 0 12px;}
     .dialog-input-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:7px;}
     .dialog-input,.existing-search{width:100%;padding:11px;background:#101116;color:#fff;border:1px solid #383c46;border-radius:9px;font:inherit;}
     .dialog-hint{min-height:20px;color:#aeb1b9;font-size:12px;margin-top:8px;}
@@ -122,6 +135,7 @@
       .image-modal-shell{padding:54px 10px 10px;}
       .dialog-input-row{grid-template-columns:1fr 1fr;}.dialog-input-row .dialog-input{grid-column:1/-1;}
       .bulk-bar{width:calc(100vw - 20px);bottom:10px;justify-content:center;flex-wrap:wrap;}
+      .edit-word-grid{grid-template-columns:1fr;}
     }
   </style>
 </head>
@@ -142,6 +156,11 @@
     <div id="exportStatus" class="status-row" aria-live="polite"></div>
     <div id="mainView">불러오는 중…</div>
   </main>
+  <footer class="site-foot">
+    <a href="./text/EDRDG_CREDITS.txt" target="_blank" rel="noopener">JMdict / KANJIDIC2 · EDRDG</a>
+    · 데이터 <span id="jmdictDate">확인 중…</span>
+    · <a href="https://github.com/mngu39/JP_Translator/actions/workflows/update-jmdict.yml" target="_blank" rel="noopener">업데이트</a>
+  </footer>
 
   <div id="bulkBar" class="bulk-bar" hidden>
     <span id="bulkCount" class="bulk-count">0개 선택</span>
@@ -186,6 +205,34 @@
     </div>
   </dialog>
 
-  <script type="module" src="./src/logs.js?v=20260719-v7"></script>
+  <dialog id="wordInfoDlg" class="word-info-dialog">
+    <h3 id="wordInfoTitle">단어 정보</h3>
+    <div id="wordInfoBody"></div>
+    <div class="dialog-actions"><button id="wordInfoClose" class="btn" type="button">닫기</button></div>
+  </dialog>
+
+  <dialog id="editItemDlg" class="edit-item-dialog">
+    <h3 id="editItemTitle">항목 수정</h3>
+    <div class="edit-grid">
+      <label>원문<textarea id="editSourceText" rows="3"></textarea></label>
+      <label>즉시 번역<textarea id="editUiTranslation" rows="2"></textarea></label>
+      <label>카드 문장 번역<textarea id="editSourceTranslation" rows="2"></textarea></label>
+      <div id="editWordFields" class="edit-grid">
+        <div class="edit-word-grid">
+          <label>기본형<input id="editTargetWord" /></label>
+          <label>화면 형태<input id="editTargetSurface" /></label>
+          <label>읽기<input id="editTargetReading" /></label>
+        </div>
+        <label>단어 뜻<textarea id="editWordTranslation" rows="2"></textarea></label>
+      </div>
+      <label>설명<textarea id="editWordExplanation" rows="3"></textarea></label>
+    </div>
+    <div class="dialog-actions">
+      <button id="editItemCancel" class="btn" type="button">취소</button>
+      <button id="editItemSave" class="btn" type="button">저장</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="./src/logs.js?v=20260813-v8"></script>
 </body>
 </html>
