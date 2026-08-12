@@ -23,8 +23,8 @@ from functools import lru_cache
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "public" / "text" / "jmdict_usage.min.json"
-JMDICT_URL = "https://ftp.edrdg.org/pub/Nihongo/JMdict_e.gz"
-KANJIDIC_URL = "https://ftp.edrdg.org/pub/Nihongo/kanjidic2.xml.gz"
+JMDICT_URL = "http://ftp.edrdg.org/pub/Nihongo/JMdict_e.gz"
+KANJIDIC_URL = "http://ftp.edrdg.org/pub/Nihongo/kanjidic2.xml.gz"
 CACHE = ROOT / ".cache" / "jmdict"
 
 KANJI_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
