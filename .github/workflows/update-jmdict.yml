@@ -1,0 +1,27 @@
+name: Update JMdict data
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build compact JMdict/KANJIDIC index
+        run: python tools/update_jmdict.py --download
+      - name: Commit updated dictionary data
+        shell: bash
+        run: |
+          if git diff --quiet -- public/text/jmdict_usage.min.json; then
+            echo "No data changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/text/jmdict_usage.min.json
+          git commit -m "Update JMdict data"
+          git push
