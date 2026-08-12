@@ -10,7 +10,7 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build compact JMdict/KANJIDIC index
         run: python tools/update_jmdict.py --download
       - name: Commit updated dictionary data
