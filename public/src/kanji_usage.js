@@ -104,7 +104,7 @@ export async function enrichSourceTokens(raw){
 export function formatUsageText(arr){
   if(!Array.isArray(arr)) return "";
   return arr.map(k=>{
-    if(k.unavailable) return `${k.char} ${k.meaning_ko||"정보 없음"} · 읽기 사전 업데이트 필요`;
+    if(k.unavailable) return `${k.char} ${k.meaning_ko||"정보 없음"}`;
     if(k.special) return `${k.char} ${k.meaning_ko||"정보 없음"} · ${k.word_reading||""} (특수 읽기)`;
     const typ=k.reading_type==="on"?"音":k.reading_type==="kun"?"訓":"";
     const ex=(k.examples||[]).map(v=>`${v.word}（${v.reading}）`).join(" · ");

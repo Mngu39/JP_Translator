@@ -47,14 +47,17 @@ const wordInfoClose=document.getElementById("wordInfoClose");
 const editItemDlg=document.getElementById("editItemDlg");
 const editItemTitle=document.getElementById("editItemTitle");
 const editSourceText=document.getElementById("editSourceText");
-const editUiTranslation=document.getElementById("editUiTranslation");
-const editWordFields=document.getElementById("editWordFields");
-const editTargetWord=document.getElementById("editTargetWord");
-const editTargetSurface=document.getElementById("editTargetSurface");
-const editTargetReading=document.getElementById("editTargetReading");
-const editSourceTranslation=document.getElementById("editSourceTranslation");
-const editWordTranslation=document.getElementById("editWordTranslation");
-const editWordExplanation=document.getElementById("editWordExplanation");
+const editReanalyzeSource=document.getElementById("editReanalyzeSource");
+const editSourceHint=document.getElementById("editSourceHint");
+const editReadingList=document.getElementById("editReadingList");
+const editWordContext=document.getElementById("editWordContext");
+const editTargetLabel=document.getElementById("editTargetLabel");
+const editInstruction=document.getElementById("editInstruction");
+const editCurrentTranslation=document.getElementById("editCurrentTranslation");
+const editCurrentWordRow=document.getElementById("editCurrentWordRow");
+const editCurrentWordMeaning=document.getElementById("editCurrentWordMeaning");
+const editCurrentExplanation=document.getElementById("editCurrentExplanation");
+const editStatus=document.getElementById("editStatus");
 const editItemCancel=document.getElementById("editItemCancel");
 const editItemSave=document.getElementById("editItemSave");
 
@@ -72,6 +75,7 @@ let sessionsCache=[];
 let selectionMode=false;
 let selectedIds=new Set();
 let currentFilter="all";
+let editState=null;
 
 function esc(s){
   return String(s ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -190,7 +194,7 @@ function usageHtml(arr){
   if(!Array.isArray(arr)||!arr.length) return "";
   return arr.map(k=>{
     if(k?.unavailable){
-      return `<div class="kanji-row"><strong class="kanji-char">${esc(k.char||"")}</strong><span class="kanji-ko">${esc(k.meaning_ko||"정보 없음")}</span><span class="special-reading">읽기 사전 업데이트 필요</span></div>`;
+      return `<div class="kanji-row"><strong class="kanji-char">${esc(k.char||"")}</strong><span class="kanji-ko">${esc(k.meaning_ko||"정보 없음")}</span></div>`;
     }
     if(k?.special){
       return `<div class="kanji-row"><strong class="kanji-char">${esc(k.char||"")}</strong><span class="kanji-ko">${esc(k.meaning_ko||"정보 없음")}</span><span class="special-reading">${esc(k.word_reading||"")} · 특수 읽기</span></div>`;
@@ -528,48 +532,164 @@ async function showWordInfo(encoded){
   }
 }
 
+function normalizeEditTokens(raw){
+  const arr=parseJson(raw,[]);
+  if(!Array.isArray(arr)) return [];
+  return arr.map(t=>({
+    surface:String(t?.surface||t?.text||""),
+    reading:String(t?.reading||t?.read||t?.kana||""),
+    lemma:String(t?.lemma||t?.base||t?.surface||t?.text||"")
+  })).filter(t=>t.surface);
+}
+function editTokenText(tokens){ return (tokens||[]).map(t=>String(t.surface||"")).join(""); }
+function copyEditTokens(tokens){ return (tokens||[]).map(t=>({...t})); }
+function targetRangeForEdit(item,source){
+  let start=Number(item?.target_start_index),end=Number(item?.target_end_index);
+  if(Number.isFinite(start)&&Number.isFinite(end)&&start>=0&&end>start&&end<=source.length) return {start,end};
+  const surface=String(item?.target_surface||"");
+  if(surface){ const i=source.indexOf(surface); if(i>=0) return {start:i,end:i+surface.length}; }
+  return null;
+}
+function renderEditReadings(){
+  if(!editState) return;
+  const source=editSourceText.value.trim();
+  const range=targetRangeForEdit(editState.item,source);
+  let cursor=0;
+  editReadingList.innerHTML=editState.tokens.map((t,index)=>{
+    const start=cursor; cursor+=String(t.surface||"").length;
+    const isTarget=range && cursor>range.start && start<range.end;
+    return `<label class="reading-token${isTarget?" target-token":""}">
+      <span class="reading-surface" lang="ja">${esc(t.surface||"")}</span>
+      <input data-reading-index="${index}" value="${esc(t.reading||"")}" aria-label="${esc(t.surface||"")} 읽기" />
+    </label>`;
+  }).join("") || '<span class="edit-hint">요미가나 정보가 없습니다. 원문을 다시 분석하세요.</span>';
+  if(editState.item.item_type==="kanji_box"){
+    editWordContext.hidden=false;
+    editTargetLabel.textContent=`${editState.item.target_surface||editState.item.target_word||""}${editState.item.target_word_reading?` · ${editState.item.target_word_reading}`:""}`;
+  }else editWordContext.hidden=true;
+}
+function collectEditTokens(){
+  if(!editState) return [];
+  const out=copyEditTokens(editState.tokens);
+  editReadingList.querySelectorAll("input[data-reading-index]").forEach(input=>{
+    const i=Number(input.dataset.readingIndex);
+    if(Number.isFinite(i)&&out[i]) out[i].reading=input.value.trim();
+  });
+  editState.tokens=out;
+  return out;
+}
+function editedReadingLocks(tokens){
+  if(!editState) return [];
+  const base=editState.baselineTokens||[];
+  const out=[];
+  for(let i=0;i<tokens.length;i++){
+    const a=tokens[i],b=base[i];
+    if(!b || a.surface!==b.surface || String(a.reading||"")!==String(b.reading||"")){
+      if(String(a.reading||"").trim()) out.push({index:i,surface:a.surface,reading:a.reading});
+    }
+  }
+  return out;
+}
+function setEditStatus(text,isError=false){
+  editStatus.textContent=text||"";
+  editStatus.classList.toggle("error",!!isError);
+}
+function updateEditSourceHint(){
+  if(!editState) return;
+  const source=editSourceText.value.trim();
+  if(source!==editState.analyzedSource){
+    editSourceHint.textContent="원문이 바뀌었습니다. 저장 시 요미가나를 자동 재분석합니다.";
+  }else editSourceHint.textContent="";
+}
+async function reanalyzeEditSource(){
+  if(!editState) return false;
+  const source=editSourceText.value.trim();
+  if(!source){ setEditStatus("원문을 입력하세요.",true); return false; }
+  editReanalyzeSource.disabled=true;
+  setEditStatus("원문에서 요미가나를 다시 분석하는 중…");
+  try{
+    const fr=await api("/run/furigana",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source})});
+    const raw=fr?.tokens||fr?.result||fr?.morphs||fr?.morphemes||[];
+    const tokens=(Array.isArray(raw)?raw:[]).map(t=>({
+      surface:String(t?.surface||t?.text||""),reading:String(t?.reading||t?.read||t?.kana||""),
+      lemma:String(t?.lemma||t?.base||t?.surface||t?.text||"")
+    })).filter(t=>t.surface);
+    if(!tokens.length || editTokenText(tokens)!==source) throw new Error("분석된 형태소가 원문과 정확히 일치하지 않습니다.");
+    editState.tokens=copyEditTokens(tokens);
+    editState.baselineTokens=copyEditTokens(tokens);
+    editState.analyzedSource=source;
+    renderEditReadings();
+    updateEditSourceHint();
+    setEditStatus("요미가나를 새 원문 기준으로 갱신했습니다. 필요한 읽기만 직접 고친 뒤 저장하세요.");
+    return true;
+  }catch(e){
+    setEditStatus(`요미가나 재분석 실패: ${e.message||e}`,true);
+    return false;
+  }finally{ editReanalyzeSource.disabled=false; }
+}
+
 async function editItemFlow(item){
   if(!item) return;
   const isWord=item.item_type==="kanji_box";
+  const tokens=normalizeEditTokens(item.source_furigana_json);
+  editState={
+    item,
+    originalSource:String(item.source_text||""),
+    analyzedSource:String(item.source_text||""),
+    tokens:copyEditTokens(tokens),
+    baselineTokens:copyEditTokens(tokens)
+  };
   editItemTitle.textContent=isWord?"단어 항목 수정":"문장 항목 수정";
   editSourceText.value=item.source_text||"";
-  editUiTranslation.value=item.ui_translation||"";
-  editSourceTranslation.value=item.source_translation||"";
-  editWordTranslation.value=item.word_translation||"";
-  editWordExplanation.value=item.word_explanation||"";
-  editTargetWord.value=item.target_word||"";
-  editTargetSurface.value=item.target_surface||"";
-  editTargetReading.value=item.target_word_reading||"";
-  editWordFields.hidden=!isWord;
+  editInstruction.value="";
+  editCurrentTranslation.textContent=item.source_translation||item.ui_translation||"(없음)";
+  editCurrentTranslation.classList.toggle("empty",!(item.source_translation||item.ui_translation));
+  editCurrentWordRow.hidden=!isWord;
+  editCurrentWordMeaning.textContent=isWord?(item.word_translation||"(없음)"):"";
+  editCurrentExplanation.textContent=item.word_explanation||"(없음)";
+  editCurrentExplanation.classList.toggle("empty",!item.word_explanation);
   editItemDlg.dataset.itemId=item.id;
-  editItemDlg.dataset.originalSource=item.source_text||"";
+  setEditStatus("");
+  renderEditReadings();
+  updateEditSourceHint();
   editItemDlg.showModal();
 }
 
 async function saveEditedItem(){
-  const id=editItemDlg.dataset.itemId||""; if(!id) return;
-  const item=currentItems.find(v=>v.id===id); if(!item) return;
+  const id=editItemDlg.dataset.itemId||""; if(!id||!editState) return;
+  const item=editState.item;
   editItemSave.disabled=true;
+  editReanalyzeSource.disabled=true;
+  const oldLabel=editItemSave.textContent;
+  editItemSave.textContent="저장 중…";
   try{
     const source=editSourceText.value.trim();
-    let sourceFurigana=item.source_furigana_json||null;
-    if(source && source!==String(editItemDlg.dataset.originalSource||"")){
-      try{
-        const fr=await api("/run/furigana",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source})});
-        const tokens=fr?.tokens||fr?.result||fr?.morphs||fr?.morphemes||[];
-        sourceFurigana=JSON.stringify(tokens.map(t=>({surface:t.surface||t.text||"",reading:t.reading||t.read||t.kana||"",lemma:t.lemma||t.base||t.surface||t.text||""})).filter(t=>t.surface));
-      }catch{ sourceFurigana=null; }
+    if(!source) throw new Error("원문을 입력하세요.");
+    collectEditTokens();
+    if(source!==editState.analyzedSource || editTokenText(editState.tokens)!==source){
+      const ok=await reanalyzeEditSource();
+      if(!ok) return;
     }
-    const body={
-      source_text:source,ui_translation:editUiTranslation.value.trim(),source_translation:editSourceTranslation.value.trim(),
-      word_translation:editWordTranslation.value.trim(),word_explanation:editWordExplanation.value.trim(),source_furigana_json:sourceFurigana
-    };
-    if(item.item_type==="kanji_box") Object.assign(body,{target_word:editTargetWord.value.trim(),target_surface:editTargetSurface.value.trim(),target_word_lemma:editTargetWord.value.trim(),target_word_reading:editTargetReading.value.trim()});
-    await api(`/api/items/${encodeURIComponent(id)}/edit`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+    const tokens=collectEditTokens();
+    const locked=editedReadingLocks(tokens);
+    const instruction=editInstruction.value.trim();
+    const changed=source!==editState.originalSource || locked.length>0 || !!instruction;
+    if(!changed){ editItemDlg.close(); return; }
+    setEditStatus("Gemini가 확정 원문·요미가나를 기준으로 해석과 설명을 다시 만드는 중…");
+    await api(`/api/items/${encodeURIComponent(id)}/revise`,{
+      method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({source_text:source,source_furigana_json:tokens,locked_readings:locked,instruction})
+    });
     editItemDlg.close();
+    editState=null;
     await loadDetail(currentSession.id);
-  }catch(e){ alert(`항목 수정 실패: ${e.message||e}`); }
-  finally{editItemSave.disabled=false;}
+  }catch(e){
+    setEditStatus(`수정 실패: ${e.message||e}`,true);
+  }finally{
+    editItemSave.disabled=false;
+    editReanalyzeSource.disabled=false;
+    editItemSave.textContent=oldLabel;
+  }
 }
 
 function groupKey(item){
@@ -792,8 +912,10 @@ imageModalClose.addEventListener("click",closeImageModal);
 imageModal.addEventListener("click",e=>{if(e.target===imageModal) closeImageModal();});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&imageModal.open) closeImageModal();});
 wordInfoClose?.addEventListener("click",()=>wordInfoDlg.close());
-editItemCancel?.addEventListener("click",()=>editItemDlg.close());
+editItemCancel?.addEventListener("click",()=>{editItemDlg.close();editState=null;});
 editItemSave?.addEventListener("click",saveEditedItem);
+editReanalyzeSource?.addEventListener("click",reanalyzeEditSource);
+editSourceText?.addEventListener("input",updateEditSourceHint);
 
 bulkSelectAll.addEventListener("click",()=>{
   const ids=visibleItemIds();
