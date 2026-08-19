@@ -59,6 +59,7 @@ const editCurrentWordMeaning=document.getElementById("editCurrentWordMeaning");
 const editCurrentExplanation=document.getElementById("editCurrentExplanation");
 const editStatus=document.getElementById("editStatus");
 const editItemCancel=document.getElementById("editItemCancel");
+const editItemApply=document.getElementById("editItemApply");
 const editItemSave=document.getElementById("editItemSave");
 
 const bulkBar=document.getElementById("bulkBar");
@@ -145,15 +146,29 @@ function parseJson(raw,fallback=null){
   try{return JSON.parse(raw);}catch{return fallback;}
 }
 
+function uniqueSentenceKanji(tokens){
+  const out=[]; const seen=new Set();
+  for(const t of tokens||[]){
+    for(const k of Array.isArray(t?.kanji)?t.kanji:[]){
+      const key=k?.special ? `${k.char}|special|${k.word_reading||""}` : `${k.char}|${k.reading_type||""}|${k.used_reading||k.display_reading||""}`;
+      if(!k?.char || seen.has(key)) continue;
+      seen.add(key); out.push(k);
+    }
+  }
+  return out;
+}
+
 async function enrichItems(items){
   return Promise.all((items||[]).map(async item=>{
     const tokens=await enrichSourceTokens(item.source_furigana_json);
     const target=item.target_surface||item.target_word||"";
-    const wordKanji=item.item_type==="kanji_box" ? await buildKanjiUsage(target,item.target_word_reading||"") : [];
+    const kanji=item.item_type==="kanji_box"
+      ? await buildKanjiUsage(target,item.target_word_reading||"")
+      : uniqueSentenceKanji(tokens);
     return {
       ...item,
       source_furigana_json:tokens.length?JSON.stringify(tokens):item.source_furigana_json,
-      kanji_json:item.item_type==="kanji_box"?JSON.stringify(wordKanji):"[]"
+      kanji_json:JSON.stringify(kanji||[])
     };
   }));
 }
@@ -200,7 +215,7 @@ function usageHtml(arr){
       return `<div class="kanji-row"><strong class="kanji-char">${esc(k.char||"")}</strong><span class="kanji-ko">${esc(k.meaning_ko||"정보 없음")}</span><span class="special-reading">${esc(k.word_reading||"")} · 특수 읽기</span></div>`;
     }
     const typ=k.reading_type==="on"?"音":k.reading_type==="kun"?"訓":"";
-    const ex=(k.examples||[]).map(v=>`${esc(v.word||"")}（${esc(v.reading||"")}）`).join(" · ");
+    const ex=(k.examples||[]).map(v=>`<button type="button" class="kanji-example" data-example-word="${esc(v.word||"")}" data-example-reading="${esc(v.reading||"")}">${esc(v.word||"")}（${esc(v.reading||"")}）</button>`).join('<span class="kanji-example-sep"> · </span>');
     return `<div class="kanji-row"><strong class="kanji-char">${esc(k.char||"")}</strong><span class="kanji-ko">${esc(k.meaning_ko||"정보 없음")}</span><span class="reading-group">${typ?`<span class="reading-badge">${typ}</span>`:""}<span>${esc(k.display_reading||k.used_reading||"")}</span></span>${ex?`<span class="kanji-examples">예: ${ex}</span>`:""}</div>`;
   }).join("");
 }
@@ -249,8 +264,9 @@ function bboxAttr(item){ const b=bboxData(item); return b ? esc(JSON.stringify(b
 
 function itemSummary(item){
   const isWord=item.item_type==="kanji_box";
+  const displayWord=item.target_surface||item.target_word||"";
   const jp=isWord
-    ? rubyWord(item.target_word||item.target_surface||"",item.target_word_reading||"")
+    ? rubyWord(displayWord,item.target_word_reading||"")
     : rubySource(item.source_text||"",item.source_furigana_json,false);
   const meaning=isWord
     ? (item.word_translation||item.source_translation||item.ui_translation||"")
@@ -259,7 +275,7 @@ function itemSummary(item){
     <div class="item-summary" role="button" tabindex="0" aria-expanded="false">
       <button class="select-mark" type="button" data-select-item="${esc(item.id)}" aria-label="선택">✓</button>
       <span class="badge ${isWord?"word":"sentence"}">${isWord?"단어":"문장"}</span>
-      <div class="summary-jp" lang="ja" title="${esc(isWord?(item.target_word||item.target_surface||""):(item.source_text||""))}">${jp}</div>
+      <div class="summary-jp" lang="ja" title="${esc(isWord?displayWord:(item.source_text||""))}">${jp}</div>
       <div class="summary-meaning" title="${esc(meaning)}">${esc(meaning)}</div>
       <div class="more-wrap">
         <button class="more-btn" type="button" aria-label="항목 메뉴" aria-expanded="false">⋯</button>
@@ -273,12 +289,14 @@ function itemSummary(item){
     <div class="item-detail" hidden>
       ${item.media_id ? `<div class="shot loading" data-media-id="${esc(item.media_id)}" data-bbox="${bboxAttr(item)}">이미지 불러오는 중…</div>` : ""}
       ${isWord ? `
+        ${item.target_word_lemma && item.target_word_lemma!==displayWord ? `<div class="info-block"><div class="info-label">기본형</div><div lang="ja">${esc(item.target_word_lemma)}</div></div>` : ""}
         <div class="info-block"><div class="info-label">원문</div><div class="jp-source" lang="ja">${rubySource(item.source_text||"",item.source_furigana_json)}</div><div class="ko-source">${esc(item.source_translation||item.ui_translation||"")}</div></div>
         ${item.word_explanation ? `<div class="info-block prewrap"><div class="info-label">설명</div>${esc(item.word_explanation)}</div>` : ""}
         ${kanjiLines(item.kanji_json)}
       ` : `
         <div class="info-block"><div class="info-label">원문</div><div class="jp-source" lang="ja">${rubySource(item.source_text||"",item.source_furigana_json)}</div><div class="ko-source">${esc(item.source_translation||item.ui_translation||"")}</div></div>
         ${item.word_explanation ? `<div class="info-block prewrap"><div class="info-label">표현 설명</div>${esc(item.word_explanation)}</div>` : ""}
+        ${kanjiLines(item.kanji_json)}
       `}
       <div class="detail-meta">${esc(fmtDate(item.created_at))}</div>
     </div>
@@ -532,13 +550,32 @@ async function showWordInfo(encoded){
   }
 }
 
+async function showExampleMeaning(word,reading){
+  word=String(word||"").trim(); reading=String(reading||"").trim();
+  if(!word) return;
+  wordInfoTitle.textContent=word;
+  wordInfoBody.innerHTML=`<div class="word-info-reading" lang="ja">${rubyWord(word,reading)}</div><div class="word-info-meaning">뜻 불러오는 중…</div>`;
+  wordInfoDlg.showModal();
+  try{
+    const r=await api("/api/example-meaning",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({word,reading})});
+    const el=wordInfoBody.querySelector(".word-info-meaning");
+    if(el) el.textContent=String(r.meaning||"")||"뜻 정보 없음";
+  }catch(e){
+    const el=wordInfoBody.querySelector(".word-info-meaning");
+    if(el) el.textContent=`뜻 조회 실패: ${e.message||e}`;
+  }
+}
+
+
 function normalizeEditTokens(raw){
   const arr=parseJson(raw,[]);
   if(!Array.isArray(arr)) return [];
   return arr.map(t=>({
+    ...t,
     surface:String(t?.surface||t?.text||""),
     reading:String(t?.reading||t?.read||t?.kana||""),
-    lemma:String(t?.lemma||t?.base||t?.surface||t?.text||"")
+    lemma:String(t?.lemma||t?.base||t?.surface||t?.text||""),
+    meaning:String(t?.meaning||""), note:String(t?.note||""), kind:String(t?.kind||"word")
   })).filter(t=>t.surface);
 }
 function editTokenText(tokens){ return (tokens||[]).map(t=>String(t.surface||"")).join(""); }
@@ -550,6 +587,10 @@ function targetRangeForEdit(item,source){
   if(surface){ const i=source.indexOf(surface); if(i>=0) return {start:i,end:i+surface.length}; }
   return null;
 }
+function tokenReadingBody(t){
+  const surf=esc(t.surface||""); const read=esc(t.reading||"");
+  return hasKanji(t.surface)&&read ? `<ruby lang="ja">${surf}<rt>${read}</rt></ruby>` : surf;
+}
 function renderEditReadings(){
   if(!editState) return;
   const source=editSourceText.value.trim();
@@ -558,137 +599,195 @@ function renderEditReadings(){
   editReadingList.innerHTML=editState.tokens.map((t,index)=>{
     const start=cursor; cursor+=String(t.surface||"").length;
     const isTarget=range && cursor>range.start && start<range.end;
-    return `<label class="reading-token${isTarget?" target-token":""}">
-      <span class="reading-surface" lang="ja">${esc(t.surface||"")}</span>
-      <input data-reading-index="${index}" value="${esc(t.reading||"")}" aria-label="${esc(t.surface||"")} 읽기" />
-    </label>`;
-  }).join("") || '<span class="edit-hint">요미가나 정보가 없습니다. 원문을 다시 분석하세요.</span>';
+    const locked=t._locked?" locked":"";
+    return `<button type="button" class="reading-token-btn${isTarget?" target-token":""}${locked}" data-edit-token-index="${index}" title="읽기 수정">${tokenReadingBody(t)}</button>`;
+  }).join("") || '<span class="edit-hint">요미가나 정보가 없습니다. 원문에서 다시 분석하세요.</span>';
   if(editState.item.item_type==="kanji_box"){
     editWordContext.hidden=false;
     editTargetLabel.textContent=`${editState.item.target_surface||editState.item.target_word||""}${editState.item.target_word_reading?` · ${editState.item.target_word_reading}`:""}`;
   }else editWordContext.hidden=true;
+  renderSingleReadingEditor();
 }
-function collectEditTokens(){
-  if(!editState) return [];
-  const out=copyEditTokens(editState.tokens);
-  editReadingList.querySelectorAll("input[data-reading-index]").forEach(input=>{
-    const i=Number(input.dataset.readingIndex);
-    if(Number.isFinite(i)&&out[i]) out[i].reading=input.value.trim();
-  });
-  editState.tokens=out;
-  return out;
+function renderSingleReadingEditor(){
+  const box=document.getElementById("editSingleReading");
+  if(!box||!editState) return;
+  const i=Number(editState.activeTokenIndex);
+  const t=Number.isFinite(i)?editState.tokens[i]:null;
+  if(!t){ box.hidden=true; box.innerHTML=""; return; }
+  box.hidden=false;
+  box.innerHTML=`<div class="single-reading-surface" lang="ja">${esc(t.surface||"")}</div><input id="editSingleReadingInput" value="${esc(t.reading||"")}" aria-label="${esc(t.surface||"")} 읽기"><button id="editSingleReadingDone" type="button" class="edit-mini-btn">적용</button>`;
+  const input=box.querySelector("#editSingleReadingInput");
+  input?.focus(); input?.select();
+  const commit=()=>{
+    if(!editState||!editState.tokens[i]) return;
+    editState.tokens[i].reading=String(input?.value||"").trim();
+    editState.tokens[i]._locked=true;
+    editState.activeTokenIndex=null;
+    markEditDirty(); renderEditReadings();
+  };
+  box.querySelector("#editSingleReadingDone")?.addEventListener("click",commit,{once:true});
+  input?.addEventListener("keydown",e=>{ if(e.key==="Enter"){e.preventDefault();commit();} });
 }
 function editedReadingLocks(tokens){
-  if(!editState) return [];
-  const base=editState.baselineTokens||[];
-  const out=[];
-  for(let i=0;i<tokens.length;i++){
-    const a=tokens[i],b=base[i];
-    if(!b || a.surface!==b.surface || String(a.reading||"")!==String(b.reading||"")){
-      if(String(a.reading||"").trim()) out.push({index:i,surface:a.surface,reading:a.reading});
-    }
-  }
-  return out;
+  return (tokens||[]).map((t,index)=>({t,index})).filter(x=>x.t?._locked && String(x.t.reading||"").trim()).map(x=>({index:x.index,surface:x.t.surface,reading:x.t.reading}));
 }
 function setEditStatus(text,isError=false){
   editStatus.textContent=text||"";
   editStatus.classList.toggle("error",!!isError);
 }
+function editFingerprint(){
+  if(!editState) return "";
+  return JSON.stringify({source:editSourceText.value.trim(),tokens:editState.tokens.map(t=>({s:t.surface,r:t.reading,l:!!t._locked})),instruction:editInstruction.value.trim()});
+}
+function markEditDirty(){
+  if(!editState) return;
+  editState.dirty=true;
+  if(editState.appliedFingerprint!==editFingerprint()) editItemApply?.classList.add("needs-apply");
+}
 function updateEditSourceHint(){
   if(!editState) return;
   const source=editSourceText.value.trim();
-  if(source!==editState.analyzedSource){
-    editSourceHint.textContent="원문이 바뀌었습니다. 저장 시 요미가나를 자동 재분석합니다.";
-  }else editSourceHint.textContent="";
+  editSourceHint.textContent=source!==editState.analyzedSource ? "원문이 바뀌었습니다." : "";
+  markEditDirty();
+}
+function morphTokensFromResponse(fr){
+  const raw=fr?.tokens||fr?.result||fr?.morphs||fr?.morphemes||[];
+  return (Array.isArray(raw)?raw:[]).map(t=>({
+    surface:String(t?.surface||t?.text||""),reading:String(t?.reading||t?.read||t?.kana||""),
+    lemma:String(t?.lemma||t?.base||t?.surface||t?.text||"")
+  })).filter(t=>t.surface);
+}
+function tokenSpansForText(tokens){
+  let p=0; return (tokens||[]).map(t=>{const start=p;p+=String(t.surface||"").length;return {...t,start,end:p};});
+}
+function readingForRange(morphs,start,end){
+  const spans=tokenSpansForText(morphs).filter(t=>t.end>start&&t.start<end);
+  if(!spans.length || spans[0].start<start || spans.at(-1).end>end) return "";
+  if(spans[0].start!==start || spans.at(-1).end!==end) return "";
+  return spans.map(t=>String(t.reading||t.surface||"")).join("");
+}
+function preserveChunkReadings(oldTokens,newSource,morphs){
+  const oldText=editTokenText(oldTokens);
+  if(oldText===newSource){
+    let p=0;
+    return oldTokens.map(t=>{
+      const start=p,end=p+String(t.surface||"").length;p=end;
+      const auto=readingForRange(morphs,start,end);
+      return {...t,reading:t._locked?t.reading:(auto||t.reading||""),_locked:!!t._locked};
+    });
+  }
+  // 원문이 바뀐 경우: 그대로 남아 있는 chunk는 보존하고, 바뀐 구간만 새 형태소를 사용한다.
+  const kept=[]; let search=0;
+  for(const t of oldTokens){
+    const surf=String(t.surface||""); if(!surf) continue;
+    const pos=newSource.indexOf(surf,search);
+    if(pos<0) continue;
+    kept.push({start:pos,end:pos+surf.length,token:t}); search=pos+surf.length;
+  }
+  const msp=tokenSpansForText(morphs); const out=[]; let cursor=0;
+  const pushMorphRange=(a,b)=>{ for(const m of msp){ if(m.start>=a&&m.end<=b) out.push({...m,_locked:false}); } };
+  for(const k of kept){
+    if(k.start<cursor) continue;
+    pushMorphRange(cursor,k.start);
+    const auto=readingForRange(morphs,k.start,k.end);
+    out.push({...k.token,reading:k.token._locked?k.token.reading:(auto||k.token.reading||""),_locked:!!k.token._locked});
+    cursor=k.end;
+  }
+  pushMorphRange(cursor,newSource.length);
+  return editTokenText(out)===newSource ? out : morphs.map(t=>({...t,_locked:false}));
 }
 async function reanalyzeEditSource(){
   if(!editState) return false;
   const source=editSourceText.value.trim();
   if(!source){ setEditStatus("원문을 입력하세요.",true); return false; }
   editReanalyzeSource.disabled=true;
-  setEditStatus("원문에서 요미가나를 다시 분석하는 중…");
+  setEditStatus("요미가나를 다시 분석하는 중…");
   try{
     const fr=await api("/run/furigana",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source})});
-    const raw=fr?.tokens||fr?.result||fr?.morphs||fr?.morphemes||[];
-    const tokens=(Array.isArray(raw)?raw:[]).map(t=>({
-      surface:String(t?.surface||t?.text||""),reading:String(t?.reading||t?.read||t?.kana||""),
-      lemma:String(t?.lemma||t?.base||t?.surface||t?.text||"")
-    })).filter(t=>t.surface);
-    if(!tokens.length || editTokenText(tokens)!==source) throw new Error("분석된 형태소가 원문과 정확히 일치하지 않습니다.");
-    editState.tokens=copyEditTokens(tokens);
-    editState.baselineTokens=copyEditTokens(tokens);
+    const morphs=morphTokensFromResponse(fr);
+    if(!morphs.length || editTokenText(morphs)!==source) throw new Error("분석 결과가 원문과 일치하지 않습니다.");
+    editState.tokens=preserveChunkReadings(editState.tokens,source,morphs);
     editState.analyzedSource=source;
-    renderEditReadings();
-    updateEditSourceHint();
-    setEditStatus("요미가나를 새 원문 기준으로 갱신했습니다. 필요한 읽기만 직접 고친 뒤 저장하세요.");
+    editState.activeTokenIndex=null;
+    renderEditReadings(); updateEditSourceHint(); markEditDirty();
+    setEditStatus("읽기를 갱신했습니다.");
     return true;
   }catch(e){
-    setEditStatus(`요미가나 재분석 실패: ${e.message||e}`,true);
-    return false;
+    setEditStatus(`요미가나 재분석 실패: ${e.message||e}`,true); return false;
   }finally{ editReanalyzeSource.disabled=false; }
 }
-
+function previewWordResult(draft,itemId){
+  return (draft?.words||[]).find(v=>String(v?.id||"")===String(itemId||""))||null;
+}
+function renderDraftPreview(draft){
+  if(!editState||!draft) return;
+  editCurrentTranslation.textContent=draft.source_translation||"(없음)";
+  editCurrentTranslation.classList.toggle("empty",!draft.source_translation);
+  const isWord=editState.item.item_type==="kanji_box";
+  const wr=previewWordResult(draft,editState.item.id);
+  editCurrentWordRow.hidden=!isWord;
+  editCurrentWordMeaning.textContent=isWord?(wr?.word_translation||"(없음)"):"";
+  const explanation=isWord?String(wr?.word_explanation||""):String(draft.sentence_explanation||"");
+  editCurrentExplanation.textContent=explanation||"(없음)";
+  editCurrentExplanation.classList.toggle("empty",!explanation);
+}
+async function ensureEditTokensMatchSource(){
+  const source=editSourceText.value.trim();
+  if(!source) throw new Error("원문을 입력하세요.");
+  if(source!==editState.analyzedSource || editTokenText(editState.tokens)!==source){
+    const ok=await reanalyzeEditSource(); if(!ok) throw new Error("원문 요미가나 재분석이 필요합니다.");
+  }
+  return source;
+}
+async function applyEditedItem(){
+  const id=editItemDlg.dataset.itemId||""; if(!id||!editState) return null;
+  editItemApply.disabled=true; editItemSave.disabled=true; editReanalyzeSource.disabled=true;
+  const old=editItemApply.textContent; editItemApply.textContent="적용 중…";
+  try{
+    const source=await ensureEditTokensMatchSource();
+    const locked=editedReadingLocks(editState.tokens); const instruction=editInstruction.value.trim();
+    setEditStatus("AI가 수정 결과를 만드는 중…");
+    const out=await api(`/api/items/${encodeURIComponent(id)}/revise`,{
+      method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({mode:"preview",source_text:source,source_furigana_json:editState.tokens,locked_readings:locked,instruction})
+    });
+    editState.draft=out.draft; editState.appliedFingerprint=editFingerprint(); editState.dirty=false;
+    editItemApply.classList.remove("needs-apply"); renderDraftPreview(editState.draft); setEditStatus("적용 결과입니다. 확인 후 저장하세요.");
+    return editState.draft;
+  }catch(e){ setEditStatus(`적용 실패: ${e.message||e}`,true); return null; }
+  finally{ editItemApply.disabled=false; editItemSave.disabled=false; editReanalyzeSource.disabled=false; editItemApply.textContent=old; }
+}
 async function editItemFlow(item){
   if(!item) return;
   const isWord=item.item_type==="kanji_box";
-  const tokens=normalizeEditTokens(item.source_furigana_json);
-  editState={
-    item,
-    originalSource:String(item.source_text||""),
-    analyzedSource:String(item.source_text||""),
-    tokens:copyEditTokens(tokens),
-    baselineTokens:copyEditTokens(tokens)
-  };
+  const tokens=normalizeEditTokens(item.source_furigana_json).map(t=>({...t,_locked:false}));
+  editState={item,originalSource:String(item.source_text||""),analyzedSource:String(item.source_text||""),tokens:copyEditTokens(tokens),activeTokenIndex:null,draft:null,appliedFingerprint:"",dirty:false};
   editItemTitle.textContent=isWord?"단어 항목 수정":"문장 항목 수정";
-  editSourceText.value=item.source_text||"";
-  editInstruction.value="";
+  editSourceText.value=item.source_text||""; editInstruction.value="";
   editCurrentTranslation.textContent=item.source_translation||item.ui_translation||"(없음)";
   editCurrentTranslation.classList.toggle("empty",!(item.source_translation||item.ui_translation));
-  editCurrentWordRow.hidden=!isWord;
-  editCurrentWordMeaning.textContent=isWord?(item.word_translation||"(없음)"):"";
-  editCurrentExplanation.textContent=item.word_explanation||"(없음)";
-  editCurrentExplanation.classList.toggle("empty",!item.word_explanation);
-  editItemDlg.dataset.itemId=item.id;
-  setEditStatus("");
-  renderEditReadings();
-  updateEditSourceHint();
-  editItemDlg.showModal();
+  editCurrentWordRow.hidden=!isWord; editCurrentWordMeaning.textContent=isWord?(item.word_translation||"(없음)"):"";
+  editCurrentExplanation.textContent=item.word_explanation||"(없음)"; editCurrentExplanation.classList.toggle("empty",!item.word_explanation);
+  editItemDlg.dataset.itemId=item.id; setEditStatus(""); renderEditReadings(); updateEditSourceHint(); editState.dirty=false; editItemApply.classList.remove("needs-apply"); editItemDlg.showModal();
 }
-
 async function saveEditedItem(){
   const id=editItemDlg.dataset.itemId||""; if(!id||!editState) return;
-  const item=editState.item;
-  editItemSave.disabled=true;
-  editReanalyzeSource.disabled=true;
-  const oldLabel=editItemSave.textContent;
-  editItemSave.textContent="저장 중…";
+  editItemSave.disabled=true; editItemApply.disabled=true; editReanalyzeSource.disabled=true;
+  const old=editItemSave.textContent; editItemSave.textContent="저장 중…";
   try{
-    const source=editSourceText.value.trim();
-    if(!source) throw new Error("원문을 입력하세요.");
-    collectEditTokens();
-    if(source!==editState.analyzedSource || editTokenText(editState.tokens)!==source){
-      const ok=await reanalyzeEditSource();
-      if(!ok) return;
+    const fp=editFingerprint();
+    if(!editState.draft || editState.appliedFingerprint!==fp){
+      editItemSave.disabled=false; editItemApply.disabled=false; editReanalyzeSource.disabled=false; editItemSave.textContent=old;
+      const draft=await applyEditedItem(); if(!draft) return;
+      editItemSave.disabled=true; editItemApply.disabled=true; editReanalyzeSource.disabled=true; editItemSave.textContent="저장 중…";
     }
-    const tokens=collectEditTokens();
-    const locked=editedReadingLocks(tokens);
-    const instruction=editInstruction.value.trim();
-    const changed=source!==editState.originalSource || locked.length>0 || !!instruction;
-    if(!changed){ editItemDlg.close(); return; }
-    setEditStatus("Gemini가 확정 원문·요미가나를 기준으로 해석과 설명을 다시 만드는 중…");
-    await api(`/api/items/${encodeURIComponent(id)}/revise`,{
-      method:"POST",headers:{"content-type":"application/json"},
-      body:JSON.stringify({source_text:source,source_furigana_json:tokens,locked_readings:locked,instruction})
-    });
-    editItemDlg.close();
-    editState=null;
-    await loadDetail(currentSession.id);
-  }catch(e){
-    setEditStatus(`수정 실패: ${e.message||e}`,true);
-  }finally{
-    editItemSave.disabled=false;
-    editReanalyzeSource.disabled=false;
-    editItemSave.textContent=oldLabel;
+    setEditStatus("저장 중…");
+    await api(`/api/items/${encodeURIComponent(id)}/revise`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({mode:"commit",draft:editState.draft})});
+    editItemDlg.close(); editState=null; await loadDetail(currentSession.id);
+  }catch(e){ setEditStatus(`저장 실패: ${e.message||e}`,true); }
+  finally{
+    if(editItemSave){editItemSave.disabled=false;editItemSave.textContent=old;}
+    if(editItemApply) editItemApply.disabled=false; if(editReanalyzeSource) editReanalyzeSource.disabled=false;
   }
 }
 
@@ -885,6 +984,9 @@ mainView.addEventListener("click",async e=>{
   const openMedia=e.target.closest("[data-open-media]");
   if(openMedia){ e.stopPropagation(); await showImage(openMedia.dataset.openMedia,openMedia.dataset.bbox||""); return; }
 
+  const exampleWord=e.target.closest(".kanji-example");
+  if(exampleWord){ e.stopPropagation(); await showExampleMeaning(exampleWord.dataset.exampleWord||"",exampleWord.dataset.exampleReading||""); return; }
+
   const sourceToken=e.target.closest(".source-token");
   if(sourceToken){ e.stopPropagation(); await showWordInfo(sourceToken.dataset.token||""); return; }
 
@@ -912,10 +1014,17 @@ imageModalClose.addEventListener("click",closeImageModal);
 imageModal.addEventListener("click",e=>{if(e.target===imageModal) closeImageModal();});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&imageModal.open) closeImageModal();});
 wordInfoClose?.addEventListener("click",()=>wordInfoDlg.close());
+wordInfoBody?.addEventListener("click",async e=>{const b=e.target.closest(".kanji-example");if(b){e.stopPropagation();await showExampleMeaning(b.dataset.exampleWord||"",b.dataset.exampleReading||"");}});
 editItemCancel?.addEventListener("click",()=>{editItemDlg.close();editState=null;});
+editItemApply?.addEventListener("click",applyEditedItem);
 editItemSave?.addEventListener("click",saveEditedItem);
 editReanalyzeSource?.addEventListener("click",reanalyzeEditSource);
 editSourceText?.addEventListener("input",updateEditSourceHint);
+editInstruction?.addEventListener("input",markEditDirty);
+editReadingList?.addEventListener("click",e=>{
+  const b=e.target.closest("[data-edit-token-index]"); if(!b||!editState) return;
+  editState.activeTokenIndex=Number(b.dataset.editTokenIndex); renderSingleReadingEditor();
+});
 
 bulkSelectAll.addEventListener("click",()=>{
   const ids=visibleItemIds();

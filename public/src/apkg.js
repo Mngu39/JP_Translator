@@ -33,8 +33,8 @@ CREATE INDEX ix_revlog_cid on revlog (cid);
 CREATE INDEX ix_notes_csum on notes (csum);
 `;
 
-const SENTENCE_MODEL_ID = 1740000000101;
-const WORD_MODEL_ID = 1740000000102;
+const SENTENCE_MODEL_ID = 1740000000111;
+const WORD_MODEL_ID = 1740000000112;
 const DEFAULT_DECK_ID = 1740000000201;
 
 const CARD_CSS = `
@@ -75,19 +75,19 @@ hr { border: 0; border-top: 1px solid #ddd; margin: 18px 0; }
 
 const TOKEN_SCRIPT = `<div id="jp-token-popup" class="jp-token-popup" hidden></div><script>(function(){var p=document.getElementById('jp-token-popup');document.querySelectorAll('.source-token').forEach(function(el){if(el.dataset.jpBound)return;el.dataset.jpBound='1';el.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation();try{var d=JSON.parse(decodeURIComponent(el.dataset.info||''));var lines=[d.surface+(d.reading?'（'+d.reading+'）':'')];if(d.meaning)lines.push(d.meaning);if(d.note)lines.push(d.note);if(d.kanji)lines.push(d.kanji);p.textContent=lines.join('\n');p.hidden=false;}catch(e){}});});})();<\/script>`;
 
-const SENTENCE_FIELDS = ["ID","Source","Translation","Explanation","Image","SourceTitle","SourceURL","SavedAt"];
-const WORD_FIELDS = ["ID","Word","Reading","Meaning","Explanation","Example","ExampleTranslation","Kanji","Image","SourceTitle","SourceURL","SavedAt"];
+const SENTENCE_FIELDS = ["ID","Source","Translation","Explanation","Kanji","Image","SourceTitle","SourceURL","SavedAt"];
+const WORD_FIELDS = ["ID","Word","Reading","BaseForm","Meaning","Explanation","Example","ExampleTranslation","Kanji","Image","SourceTitle","SourceURL","SavedAt"];
 
 const SENTENCE_TEMPLATE = {
   name:"Sentence Card",
   qfmt:`<div class="jp-main" lang="ja">{{Source}}</div>${TOKEN_SCRIPT}{{Image}}<div class="source">{{SourceTitle}}</div>`,
-  afmt:`{{FrontSide}}<hr id="answer"><div class="translation">{{Translation}}</div>{{#Explanation}}<div class="explanation">{{Explanation}}</div>{{/Explanation}}<div class="source">{{#SourceURL}}<a href="{{SourceURL}}">{{SourceTitle}}</a>{{/SourceURL}}{{^SourceURL}}{{SourceTitle}}{{/SourceURL}}<br>{{SavedAt}}</div>`
+  afmt:`{{FrontSide}}<hr id="answer"><div class="translation">{{Translation}}</div>{{#Explanation}}<div class="explanation">{{Explanation}}</div>{{/Explanation}}{{#Kanji}}<div class="kanji-info">{{Kanji}}</div>{{/Kanji}}<div class="source">{{#SourceURL}}<a href="{{SourceURL}}">{{SourceTitle}}</a>{{/SourceURL}}{{^SourceURL}}{{SourceTitle}}{{/SourceURL}}<br>{{SavedAt}}</div>`
 };
 
 const WORD_TEMPLATE = {
   name:"Word Card",
   qfmt:`<div class="jp-word" lang="ja">{{Word}}</div><div class="example" lang="ja">{{Example}}</div>${TOKEN_SCRIPT}{{Image}}<div class="source">{{SourceTitle}}</div>`,
-  afmt:`<div class="jp-word" lang="ja">{{Word}}</div>{{#Reading}}<div class="reading" lang="ja">{{Reading}}</div>{{/Reading}}<div class="translation">{{Meaning}}</div>{{#Explanation}}<div class="explanation">{{Explanation}}</div>{{/Explanation}}<hr><div class="label">Example</div><div class="example" lang="ja">{{Example}}</div>${TOKEN_SCRIPT}<div>{{ExampleTranslation}}</div>{{#Kanji}}<div class="kanji-info">{{Kanji}}</div>{{/Kanji}}{{Image}}<div class="source">{{#SourceURL}}<a href="{{SourceURL}}">{{SourceTitle}}</a>{{/SourceURL}}{{^SourceURL}}{{SourceTitle}}{{/SourceURL}}<br>{{SavedAt}}</div>`
+  afmt:`<div class="jp-word" lang="ja">{{Word}}</div>{{#Reading}}<div class="reading" lang="ja">{{Reading}}</div>{{/Reading}}{{#BaseForm}}<div class="reading" lang="ja">기본형: {{BaseForm}}</div>{{/BaseForm}}<div class="translation">{{Meaning}}</div>{{#Explanation}}<div class="explanation">{{Explanation}}</div>{{/Explanation}}<hr><div class="label">Example</div><div class="example" lang="ja">{{Example}}</div>${TOKEN_SCRIPT}<div>{{ExampleTranslation}}</div>{{#Kanji}}<div class="kanji-info">{{Kanji}}</div>{{/Kanji}}{{Image}}<div class="source">{{#SourceURL}}<a href="{{SourceURL}}">{{SourceTitle}}</a>{{/SourceURL}}{{^SourceURL}}{{SourceTitle}}{{/SourceURL}}<br>{{SavedAt}}</div>`
 };
 
 function esc(s){
@@ -231,7 +231,7 @@ function kanjiHtml(raw){
   if(!Array.isArray(arr) || !arr.length) return "";
   return arr.map(k=>{
     if(k?.unavailable){
-      return `<div class="kanji-line"><b style="font-size:1.18em">${esc(k.char||"")}</b>　<b>${esc(k.meaning_ko||"정보 없음")}</b>　<span>읽기 사전 업데이트 필요</span></div>`;
+      return `<div class="kanji-line"><b style="font-size:1.18em">${esc(k.char||"")}</b>　<b>${esc(k.meaning_ko||"정보 없음")}</b></div>`;
     }
     if(k?.special){
       return `<div class="kanji-line"><b style="font-size:1.18em">${esc(k.char||"")}</b>　<b>${esc(k.meaning_ko||"정보 없음")}</b>　<span>${esc(k.word_reading||"")} · 특수 읽기</span></div>`;
@@ -255,11 +255,12 @@ function noteFields(item){
     return {
       modelId:WORD_MODEL_ID,
       tags:" jp-translator word-box ",
-      sort:String(item.target_word || item.target_surface || item.source_text || ""),
+      sort:String(item.target_surface || item.target_word || item.source_text || ""),
       fields:[
         esc(item.id),
-        esc(item.target_word || item.target_surface || ""),
+        esc(item.target_surface || item.target_word || ""),
         esc(item.target_word_reading || ""),
+        esc(item.target_word_lemma && item.target_word_lemma!==(item.target_surface||item.target_word||"") ? item.target_word_lemma : ""),
         esc(item.word_translation || ""),
         esc(item.word_explanation || ""),
         highlightExample(item),
@@ -281,6 +282,7 @@ function noteFields(item){
       sentenceHtml(item),
       esc(item.source_translation || item.ui_translation || ""),
       esc(item.word_explanation || ""),
+      kanjiHtml(item.kanji_json),
       image,
       title,
       url,

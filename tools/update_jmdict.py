@@ -232,8 +232,26 @@ def valid_surface(word: str) -> bool:
     )
 
 
+def entry_meaning_signature(entry) -> str:
+    """Internal-only signature used to avoid near-duplicate example words.
+
+    English glosses are NOT written to the browser JSON; they are only used while
+    building the compact index so spelling variants with effectively the same sense
+    do not occupy multiple example slots.
+    """
+    vals = []
+    for sense in entry.findall("sense"):
+        for g in sense.findall("gloss"):
+            text = " ".join((g.text or "").lower().split())
+            if text and text not in vals:
+                vals.append(text)
+        if len(vals) >= 4:
+            break
+    return "|".join(vals[:4])
+
+
 def build_examples(path: Path, readings: dict):
-    candidates = defaultdict(dict)  # key -> word -> (score, reading)
+    candidates = defaultdict(dict)  # key -> word -> (score, reading, semantic_signature)
     count = 0
     with gzip.open(path, "rb") as f:
         for event, elem in ET.iterparse(f, events=("end",)):
@@ -242,6 +260,7 @@ def build_examples(path: Path, readings: dict):
             count += 1
             if is_bad_entry(elem):
                 elem.clear(); continue
+            semantic_sig = entry_meaning_signature(elem)
             keles = []
             for k in elem.findall("k_ele"):
                 keb = (k.findtext("keb") or "").strip()
@@ -271,14 +290,31 @@ def build_examples(path: Path, readings: dict):
                         existing = candidates[key].get(keb)
                         cand_score = score * 100 + len(keb)
                         if existing is None or cand_score < existing[0]:
-                            candidates[key][keb] = (cand_score, reb)
+                            candidates[key][keb] = (cand_score, reb, semantic_sig)
             elem.clear()
             if count % 25000 == 0:
                 print(f"parsed JMdict entries: {count}")
     examples = {}
     for key, words in candidates.items():
-        ranked = sorted(((sc, w, rd) for w, (sc, rd) in words.items()), key=lambda x:(x[0], len(x[1]), x[1]))[:12]
-        examples[key] = [[w, rd] for _, w, rd in ranked]
+        ranked = sorted(((sc, w, rd, sig) for w, (sc, rd, sig) in words.items()), key=lambda x:(x[0], len(x[1]), x[1]))
+        chosen = []
+        seen_semantics = set()
+        seen_read_word = set()
+        for sc, w, rd, sig in ranked:
+            # Exact reading+word duplicates are trivial; semantic signatures also remove
+            # cases such as alternate spellings that mean essentially the same thing.
+            rw = (norm_reading(rd), w)
+            if rw in seen_read_word:
+                continue
+            if sig and sig in seen_semantics:
+                continue
+            chosen.append([w, rd])
+            seen_read_word.add(rw)
+            if sig:
+                seen_semantics.add(sig)
+            if len(chosen) >= 12:
+                break
+        examples[key] = chosen
     return examples
 
 
