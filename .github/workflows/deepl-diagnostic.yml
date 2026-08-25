@@ -1,0 +1,20 @@
+name: DeepL diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run DeepL idle diagnostic
+        env:
+          WORKER_BASE: https://jp-translator-api.rlaalsrbr.workers.dev
+        run: |
+          python3 tools/deepl_diagnostic.py
