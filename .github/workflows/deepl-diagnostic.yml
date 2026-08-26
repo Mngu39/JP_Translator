@@ -9,12 +9,15 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 355
+    env:
+      WORKER_BASE: https://jp-translator-api.rlaalsrbr.workers.dev
+      APP_TOKEN: ${{ secrets.DIAG_APP_TOKEN }}
     steps:
       - uses: actions/checkout@v6
 
+      - name: Validate diagnostic before long wait
+        run: python3 tools/deepl_diagnostic.py --preflight
+
       - name: Run DeepL idle diagnostic
-        env:
-          WORKER_BASE: https://jp-translator-api.rlaalsrbr.workers.dev
-        run: |
-          python3 tools/deepl_diagnostic.py
+        run: python3 tools/deepl_diagnostic.py
