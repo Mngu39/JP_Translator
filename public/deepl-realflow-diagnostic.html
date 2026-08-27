@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>JP Translator 실제 흐름 진단</title>
+<style>
+:root{color-scheme:light dark}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#111;color:#eee}
+main{max-width:980px;margin:auto;padding:24px}.card{background:#191b20;border:1px solid #343842;border-radius:16px;padding:18px;margin:14px 0}
+input,textarea,button{font:inherit}input,textarea{width:100%;box-sizing:border-box;padding:12px;border-radius:10px;border:1px solid #454b59;background:#101116;color:#fff}
+button{padding:12px 18px;border-radius:10px;border:0;background:#2f66d0;color:white;font-weight:700}.muted{color:#aeb6c4;font-size:.92rem}
+table{width:100%;border-collapse:collapse;margin-top:12px}th,td{padding:9px;border-bottom:1px solid #343842;text-align:right}th:first-child,td:first-child{text-align:left}
+.ok{color:#73d98b}.bad{color:#ff7d7d}pre{white-space:pre-wrap;word-break:break-word;background:#0e0f13;padding:14px;border-radius:10px;max-height:700px;overflow:auto}
+h1{font-size:1.5rem}.row{display:flex;gap:10px;flex-wrap:wrap}.row>*{flex:1 1 220px}
+</style>
+</head>
+<body>
+<main>
+<h1>JP Translator 실제 사진번역 흐름 진단</h1>
+<div class="card">
+<p>실제 사진번역기와 같은 <b>x-log-token</b> 인증 + <b>후리가나/DeepL 병렬 호출</b>을 먼저 실행합니다.</p>
+<p class="muted">페이지를 연 것만으로 Worker 요청은 보내지 않습니다. APP_TOKEN은 이 페이지의 메모리에서만 사용하며 저장하지 않습니다.</p>
+<label>APP_TOKEN</label>
+<input id="token" type="password" autocomplete="off">
+<label style="display:block;margin-top:12px">테스트 일본어 문장</label>
+<textarea id="text" rows="3">今日は少し眠いけれど、まだやることがあります。</textarea>
+<div style="margin-top:14px"><button id="run">진단 실행</button></div>
+<div id="status" class="muted" style="margin-top:10px"></div>
+</div>
+
+<div id="results" class="card" hidden>
+<h2>결과</h2>
+<table>
+<thead><tr><th>테스트</th><th>브라우저 전체</th><th>Worker 내부</th><th>핵심 upstream</th><th>HTTP</th></tr></thead>
+<tbody id="tbody"></tbody>
+</table>
+<p id="interpret"></p>
+<div class="row"><button id="copy">결과 복사</button></div>
+<pre id="raw"></pre>
+</div>
+</main>
+<script>
+const BASE="https://jp-translator-api.rlaalsrbr.workers.dev";
+const $=s=>document.querySelector(s);
+const ms=x=>Number.isFinite(x)?`${x.toFixed(1)} ms`:"-";
+
+async function fetchTimed(url,opts={}){
+  const t0=performance.now();
+  let resp, body, err=null;
+  try{
+    resp=await fetch(url,opts);
+    const tHeaders=performance.now();
+    const txt=await resp.text();
+    const tEnd=performance.now();
+    try{body=JSON.parse(txt)}catch{body={raw:txt}}
+    return {browser_ms:tEnd-t0,headers_ms:tHeaders-t0,body_ms:tEnd-tHeaders,http:resp.status,body};
+  }catch(e){
+    const tEnd=performance.now();
+    return {browser_ms:tEnd-t0,headers_ms:null,body_ms:null,http:null,body:null,error:String(e)};
+  }
+}
+function appHeaders(token){ return {"x-app-token":token,"content-type":"application/json"} }
+function logHeaders(token){ return {"x-log-token":token,"content-type":"application/json"} }
+
+async function issueLogToken(appToken){
+  const r=await fetchTimed(`${BASE}/auth/open-token`,{
+    method:"POST",headers:appHeaders(appToken),
+    body:JSON.stringify({scope:"diag-real-flow"})
+  });
+  if(r.http!==200 || !r.body?.log_token) throw new Error(`log token 발급 실패 HTTP ${r.http}: ${JSON.stringify(r.body)}`);
+  return {token:r.body.log_token,timing:r};
+}
+async function translate(text,headers){
+  return fetchTimed(`${BASE}/run/translate?diag=1`,{
+    method:"POST",headers,
+    body:JSON.stringify({text,src:"ja",tgt:"ko"})
+  });
+}
+async function furigana(text,headers){
+  return fetchTimed(`${BASE}/run/furigana?diag=1`,{
+    method:"POST",headers,
+    body:JSON.stringify({text,perChar:false})
+  });
+}
+function workerMs(r){ return r?.body?._diag?.worker_before_response_ms ?? null }
+function translateUp(r){ return r?.body?._diag?.deepl_fetch_ms ?? null }
+function furiUp(r){ return r?.body?._diag?.upstream_total_ms ?? null }
+
+function row(name,r,up){
+  return {
+    name,
+    browser_ms:r.browser_ms,
+    worker_ms:workerMs(r),
+    upstream_ms:up,
+    http:r.http,
+    colo:r?.body?._diag?.cf_colo ?? null,
+    diag:r?.body?._diag ?? null,
+    body:r.body,
+    error:r.error ?? null
+  };
+}
+function addRow(x){
+  const tr=document.createElement("tr");
+  tr.innerHTML=`<td>${x.name}</td><td>${ms(x.browser_ms)}</td><td>${ms(x.worker_ms)}</td><td>${ms(x.upstream_ms)}</td><td>${x.http??"ERR"}</td>`;
+  $("#tbody").appendChild(tr);
+}
+function interpret(data){
+  const p=data.real_parallel.translate;
+  const f=data.real_parallel.furigana;
+  const isoLog=data.isolated_log_translate;
+  const isoMaster=data.isolated_master_translate;
+  const parallel2=data.second_parallel.translate;
+
+  const lines=[];
+  if(p.browser_ms>=3000){
+    if((p.worker_ms??0)>=2500 && (p.upstream_ms??0)>=2500){
+      lines.push("첫 실제형 번역 지연은 Worker 내부의 DeepL fetch 구간에서 발생했습니다.");
+    }else if((p.worker_ms??0)<1500){
+      lines.push("첫 실제형 번역의 브라우저 지연은 크지만 Worker 내부는 빠릅니다. iPad/Safari↔Cloudflare 또는 프런트 전달 구간을 의심해야 합니다.");
+    }else{
+      lines.push("첫 실제형 번역 지연이 Worker 내부에서 발생했지만 DeepL fetch만으로 전부 설명되지는 않습니다.");
+    }
+  }else{
+    lines.push("이번 실행에서는 실제형 병렬 첫 번역의 3초 이상 지연이 재현되지 않았습니다.");
+  }
+
+  if(p.browser_ms>=3000 && isoLog.browser_ms<1500){
+    lines.push("x-log-token 단독 번역은 빠르므로 log-token 인증 자체보다는 병렬 호출/첫 실제형 호출 조건이 더 의심됩니다.");
+  }
+  if(isoLog.browser_ms>=3000 && isoMaster.browser_ms<1500){
+    lines.push("x-log-token 경로에서만 느리고 x-app-token은 빠릅니다. 인증 경로 차이를 의심해야 합니다.");
+  }
+  if(Math.abs(isoLog.browser_ms-isoMaster.browser_ms)<800){
+    lines.push("x-log-token과 x-app-token 단독 번역의 차이는 크지 않습니다.");
+  }
+  if(p.browser_ms>=3000 && parallel2.browser_ms<1500){
+    lines.push("첫 병렬 호출만 느리고 직후 같은 병렬 호출은 빠릅니다.");
+  }
+  if(f.browser_ms<1500 && p.browser_ms>=3000){
+    lines.push("후리가나는 빠른데 번역만 느려 실제 증상과 일치합니다.");
+  }
+  return lines.join(" ");
+}
+
+$("#run").onclick=async()=>{
+  const btn=$("#run"); btn.disabled=true;
+  $("#results").hidden=true; $("#tbody").innerHTML="";
+  const appToken=$("#token").value.trim();
+  const text=$("#text").value;
+  if(!appToken){alert("APP_TOKEN을 입력하세요.");btn.disabled=false;return}
+  try{
+    $("#status").textContent="1/5 log token 발급...";
+    const tok1=await issueLogToken(appToken);
+    const lh1=logHeaders(tok1.token);
+
+    $("#status").textContent="2/5 실제 앱과 동일한 후리가나 + DeepL 병렬 첫 호출...";
+    const pairStart=performance.now();
+    const [fr1,tr1]=await Promise.all([furigana(text,lh1),translate(text,lh1)]);
+    const pairEnd=performance.now();
+
+    $("#status").textContent="3/5 새 log token으로 DeepL 단독 호출...";
+    const tok2=await issueLogToken(appToken);
+    const trLog=await translate(text,logHeaders(tok2.token));
+
+    $("#status").textContent="4/5 APP_TOKEN으로 DeepL 단독 호출...";
+    const trMaster=await translate(text,appHeaders(appToken));
+
+    $("#status").textContent="5/5 같은 log token으로 병렬 호출 재검증...";
+    const pair2Start=performance.now();
+    const [fr2,tr2]=await Promise.all([furigana(text,lh1),translate(text,lh1)]);
+    const pair2End=performance.now();
+
+    const data={
+      timestamp:new Date().toISOString(),
+      text,
+      token_issue_first_ms:tok1.timing.browser_ms,
+      token_issue_second_ms:tok2.timing.browser_ms,
+      real_parallel:{
+        promise_all_ms:pairEnd-pairStart,
+        furigana:row("실제형 첫 병렬: 후리가나",fr1,furiUp(fr1)),
+        translate:row("실제형 첫 병렬: DeepL",tr1,translateUp(tr1))
+      },
+      isolated_log_translate:row("새 x-log-token: DeepL 단독",trLog,translateUp(trLog)),
+      isolated_master_translate:row("x-app-token: DeepL 단독",trMaster,translateUp(trMaster)),
+      second_parallel:{
+        promise_all_ms:pair2End-pair2Start,
+        furigana:row("직후 2차 병렬: 후리가나",fr2,furiUp(fr2)),
+        translate:row("직후 2차 병렬: DeepL",tr2,translateUp(tr2))
+      }
+    };
+
+    const rows=[
+      data.real_parallel.furigana,
+      data.real_parallel.translate,
+      data.isolated_log_translate,
+      data.isolated_master_translate,
+      data.second_parallel.furigana,
+      data.second_parallel.translate
+    ];
+    rows.forEach(addRow);
+    $("#interpret").textContent=interpret(data);
+    $("#raw").textContent=JSON.stringify(data,null,2);
+    $("#results").hidden=false;
+    $("#status").innerHTML='<span class="ok">완료. 아래 JSON을 그대로 보내면 됩니다.</span>';
+    $("#copy").onclick=async()=>{await navigator.clipboard.writeText(JSON.stringify(data,null,2));$("#copy").textContent="복사됨"};
+  }catch(e){
+    $("#status").innerHTML=`<span class="bad">실패: ${String(e?.message||e)}</span>`;
+  }finally{
+    btn.disabled=false;
+  }
+};
+</script>
+</body>
+</html>
