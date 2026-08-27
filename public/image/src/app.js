@@ -298,6 +298,10 @@ function mergeSoftLineBreakAnnots(list){
     if(!id) throw new Error("?id= 필요");
     currentImageId = id;
 
+    // 사진이 열리는 즉시 Cloud Run 후리가나 서버를 미리 깨운다.
+    // OCR과 병렬로 실행하며, 결과를 기다리거나 화면 흐름을 막지 않는다.
+    getFurigana("あ").catch(()=>{});
+
     imgEl.onload = async ()=>{
       const q=tryConsumeQuota();
       if(!q.ok){
@@ -745,24 +749,37 @@ async function openMainPopover(anchor, text){
   transLine.textContent="…";
   scheduleReposition();
 
-  try{
-    const [tokens, tr] = await Promise.all([currentSentenceFuriganaPromise, translateJaKo(text)]);
+  // 후리가나와 번역은 병렬 요청하되, 서로 기다리지 않고 도착 즉시 각각 화면에 반영한다.
+  const furiTask = currentSentenceFuriganaPromise.then(tokens=>{
+    if(currentSentenceText !== text) return;
     baseSentenceTokens = tokens;
-    baseSentenceTranslation = tr?.text || tr?.result || tr?.translation || "";
-    currentSentenceFuriganaTokens = baseSentenceTokens;
-    currentSentenceFuriganaPromise = Promise.resolve(baseSentenceTokens);
-    currentSentenceTranslation = baseSentenceTranslation;
+    currentSentenceFuriganaTokens = tokens;
+    currentSentenceFuriganaPromise = Promise.resolve(tokens);
     if(tokens.length) renderFuriganaTokens(rubyLine, tokens);
-    transLine.textContent = baseSentenceTranslation || "(번역 없음)";
-    if(btnAi) btnAi.disabled = false;
-  }catch(e){
+    scheduleReposition();
+  }).catch(e=>{
     console.error(e);
-    if(!transLine.textContent || transLine.textContent==="…") transLine.textContent="(번역 실패)";
-    if(btnAi && currentSentenceText) btnAi.disabled = false;
-  }
+  });
 
-  updateAiButton();
-  scheduleReposition();
+  const translateTask = translateJaKo(text).then(tr=>{
+    if(currentSentenceText !== text) return;
+    baseSentenceTranslation = tr?.text || tr?.result || tr?.translation || "";
+    currentSentenceTranslation = baseSentenceTranslation;
+    transLine.textContent = baseSentenceTranslation || "(번역 없음)";
+    scheduleReposition();
+  }).catch(e=>{
+    console.error(e);
+    if(currentSentenceText === text && (!transLine.textContent || transLine.textContent==="…")){
+      transLine.textContent="(번역 실패)";
+    }
+  });
+
+  Promise.allSettled([furiTask, translateTask]).then(()=>{
+    if(currentSentenceText !== text) return;
+    if(btnAi) btnAi.disabled = false;
+    updateAiButton();
+    scheduleReposition();
+  });
 }
 
 // ===== 토큰 뷰 채우기 =====
