@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>JP Translator · 첫 번역 지연 진단</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:light dark}
+body{margin:0;background:#f5f6f8;color:#111} main{max-width:780px;margin:auto;padding:22px}
+.card{background:#fff;border:1px solid #ddd;border-radius:14px;padding:16px;margin:12px 0} h1{font-size:21px;margin:0 0 8px}
+label{display:block;font-size:13px;font-weight:700;margin:12px 0 5px} input,textarea{box-sizing:border-box;width:100%;font:inherit;padding:10px;border:1px solid #bbb;border-radius:9px;background:#fff;color:#111}
+textarea{min-height:78px;resize:vertical}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.btn{border:0;border-radius:10px;padding:11px 15px;font-weight:700;background:#111;color:#fff}.btn:disabled{opacity:.45}
+.small{font-size:12px;color:#666;line-height:1.45}.status{font-weight:700}.ok{color:#087a2f}.bad{color:#b00020}
+table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:7px;border-bottom:1px solid #ddd;text-align:right}th:first-child,td:first-child{text-align:left}
+pre{white-space:pre-wrap;word-break:break-word;font-size:12px;background:#f0f1f3;padding:10px;border-radius:9px;max-height:260px;overflow:auto}
+@media(prefers-color-scheme:dark){body{background:#111;color:#eee}.card{background:#1b1b1b;border-color:#444}input,textarea{background:#111;color:#eee;border-color:#555}.small{color:#aaa}pre{background:#111}th,td{border-color:#444}}
+</style>
+</head>
+<body><main>
+<div class="card">
+<h1>첫 번역 지연 진단</h1>
+<div class="small">페이지를 연 것만으로는 서버 요청을 보내지 않습니다. 오래 사용하지 않은 상태에서 아래 버튼을 딱 한 번 누르세요. 첫 요청과 직후 두 번째 요청을 연속 측정합니다.</div>
+<label>APP_TOKEN</label><input id="token" type="password" autocomplete="off" spellcheck="false">
+<label>테스트 일본어</label><textarea id="text" lang="ja">今日は少し眠いけど、まだやることがある。</textarea>
+<div class="row" style="margin-top:12px"><button id="run" class="btn">진단 실행</button><button id="copy" class="btn" disabled>결과 복사</button><span id="status" class="status"></span></div>
+<div class="small" style="margin-top:8px">토큰은 이 페이지에서 저장하지 않으며, 기존 Worker의 x-app-token 인증에만 사용합니다.</div>
+</div>
+<div id="result" class="card" hidden>
+<table><thead><tr><th>구간</th><th>첫 요청</th><th>직후 2차</th></tr></thead><tbody id="rows"></tbody></table>
+<p id="judge"></p><pre id="raw"></pre>
+</div>
+<script>
+const WORKER='https://jp-translator-api.rlaalsrbr.workers.dev';
+const $=id=>document.getElementById(id); let lastResult=null;
+function n(v){return typeof v==='number'?v.toFixed(1):'—'}
+async function one(token,text){
+  const t0=performance.now(); let resp, body;
+  try{
+    resp=await fetch(WORKER+'/run/translate?diag=1',{method:'POST',headers:{'content-type':'application/json','x-app-token':token},body:JSON.stringify({text,src:'ja',tgt:'ko'}),cache:'no-store'});
+    body=await resp.json().catch(()=>({error:'non-json response'}));
+  }catch(e){return {browser_ms:performance.now()-t0,http:null,error:String(e)}}
+  return {browser_ms:performance.now()-t0,http:resp.status,body};
+}
+function cell(name,a,b){return `<tr><td>${name}</td><td>${n(a)}</td><td>${n(b)}</td></tr>`}
+function classify(a,b){
+  if(a.http!==200) return `첫 요청이 HTTP ${a.http ?? 'network error'}라 정상 진단이 아닙니다.`;
+  const d=a.body?._diag||{}; const browser=a.browser_ms, worker=d.worker_before_response_ms, deep=d.deepl_fetch_ms+d.deepl_body_ms;
+  if(browser<2500) return '이번 첫 요청에서는 5초급 지연이 재현되지 않았습니다. 몇 시간 idle 후 다시 이 페이지에서 최초 요청으로 실행해야 합니다.';
+  if(typeof worker==='number' && worker >= browser*0.70){
+    if(typeof deep==='number' && deep >= worker*0.70) return '지연의 대부분이 Worker 내부의 DeepL upstream 요청에서 발생했습니다. → Cloudflare Worker → DeepL 경로가 주원인입니다.';
+    return '지연의 대부분이 Worker 내부에서 발생했지만 DeepL fetch만으로 설명되지는 않습니다. 세부 Worker timing을 확인해야 합니다.';
+  }
+  if(typeof worker==='number' && worker < browser*0.50) return 'Worker 내부는 빠른데 브라우저 전체 시간이 깁니다. → iPad/Safari ↔ Cloudflare edge 또는 응답 전달 경로가 주원인입니다.';
+  return '지연이 Worker 안팎에 나뉘어 있습니다. 아래 원시 결과를 기준으로 추가 판정이 필요합니다.';
+}
+$('run').onclick=async()=>{
+  const token=$('token').value.trim(), text=$('text').value;
+  if(!token){$('status').textContent='APP_TOKEN 입력 필요';$('status').className='status bad';return}
+  if(!text.trim()){return}
+  $('run').disabled=true;$('status').textContent='첫 요청 측정 중…';$('status').className='status';
+  const first=await one(token,text);
+  if(first.http!==200){
+    $('status').textContent=`첫 요청 실패: HTTP ${first.http ?? 'network'}`;$('status').className='status bad';
+    lastResult={first}; show(lastResult); $('run').disabled=false; return;
+  }
+  $('status').textContent='직후 두 번째 요청 측정 중…';
+  const second=await one(token,text); lastResult={timestamp:new Date().toISOString(),first,second}; show(lastResult);
+  $('status').textContent='완료';$('status').className='status ok';$('run').disabled=false;$('copy').disabled=false;
+};
+function show(r){
+  const a=r.first||{},b=r.second||{},ad=a.body?._diag||{},bd=b.body?._diag||{};
+  $('rows').innerHTML = cell('브라우저 전체 (ms)',a.browser_ms,b.browser_ms)+cell('Worker 전체 (ms)',ad.worker_before_response_ms,bd.worker_before_response_ms)+cell('인증 (ms)',ad.auth_ms,bd.auth_ms)+cell('요청 JSON 파싱 (ms)',ad.request_parse_ms,bd.request_parse_ms)+cell('DeepL fetch/headers (ms)',ad.deepl_fetch_ms,bd.deepl_fetch_ms)+cell('DeepL body 읽기 (ms)',ad.deepl_body_ms,bd.deepl_body_ms)+cell('응답 JSON 파싱 (ms)',ad.response_parse_ms,bd.response_parse_ms);
+  $('judge').textContent=classify(a,b);
+  $('raw').textContent=JSON.stringify(r,null,2);$('result').hidden=false;
+}
+$('copy').onclick=async()=>{if(!lastResult)return; try{await navigator.clipboard.writeText(JSON.stringify(lastResult,null,2));$('status').textContent='결과 복사됨'}catch{$('status').textContent='복사 실패: 아래 JSON을 직접 복사'}};
+</script></main></body></html>
