@@ -1,0 +1,18 @@
+name: Cloud Run cold-start retest
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  retest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FURIGANA_URL: https://furigana-api-345684237835.asia-northeast1.run.app/furigana
+    steps:
+      - uses: actions/checkout@v6
+      - name: Retest Cloud Run cold start
+        run: python3 tools/cloudrun_coldstart_retest.py
