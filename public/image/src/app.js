@@ -244,50 +244,53 @@ async function loadDBs(){
 }
 const DB_READY = loadDBs();
 
-// ===== OCR: soft 줄바꿈 병합 (문단 내 엔터 1회 느낌) =====
+// ===== OCR: 원본 박스/글자 높이를 보존한 자막 그룹화 =====
 function mergeSoftLineBreakAnnots(list){
-  if(!Array.isArray(list) || list.length<=1) return list || [];
-  // polygon bbox 계산
-  const withBox = list.map((a,i)=>{
-    const v = a.polygon || [];
-    const xs = v.map(p=>p[0]||0), ys = v.map(p=>p[1]||0);
-    const l = Math.min(...xs), r=Math.max(...xs);
-    const t = Math.min(...ys), b=Math.max(...ys);
-    return {...a, _i:i, _l:l,_r:r,_t:t,_b:b, _w:r-l, _h:b-t};
-  }).sort((a,b)=> (a._t-b._t) || (a._l-b._l));
+  if(!Array.isArray(list)) return [];
+  const boxes=list.map((a,i)=>{
+    const v=a.polygon;
+    if(!Array.isArray(v) || v.length!==4 || !v.every(p=>Array.isArray(p) && p.length>=2 && Number.isFinite(p[0]) && Number.isFinite(p[1]))) return null;
+    const xs=v.map(p=>p[0]), ys=v.map(p=>p[1]);
+    const l=Math.min(...xs), r=Math.max(...xs), t=Math.min(...ys), b=Math.max(...ys);
+    if(r<=l || b<=t) return null;
+    const h=Number(a.charHeight);
+    // Unknown metrics (old Worker / OCR fallback) and rotated/vertical text stay intact.
+    const level=Math.abs(v[1][1]-v[0][1])<=Math.abs(v[1][0]-v[0][0])*0.35 &&
+      Math.abs(v[2][1]-v[3][1])<=Math.abs(v[2][0]-v[3][0])*0.35;
+    return {a,i,l,r,t,b,h,axes:[l,(l+r)/2,r], mergeable:Number.isFinite(h) && h>0 && a.horizontal===true && level};
+  }).filter(Boolean).sort((a,b)=>a.t-b.t || a.l-b.l || a.i-b.i);
 
-  const out=[];
-  for(const a of withBox){
-    const prev = out[out.length-1];
-    if(!prev){
-      out.push(a);
-      continue;
+  const groups=[];
+  for(const a of boxes){
+    let best=null, bestScore=Infinity;
+    if(a.mergeable) for(const g of groups){
+      const prev=g.items[g.items.length-1];
+      if(!prev.mergeable) continue;
+      const minH=Math.min(g.minH,a.h), maxH=Math.max(g.maxH,a.h);
+      if(minH/maxH<0.72) continue;
+      const h=Math.min(prev.h,a.h), gap=a.t-prev.b;
+      // Allow a little OCR box overlap, but never join side-by-side boxes as lines.
+      if(a.t-prev.t<h*0.5 || gap < -h*0.15 || gap>h*1.2) continue;
+      const axisSpread=Math.min(...a.axes.map((x,k)=>Math.max(g.maxAxes[k],x)-Math.min(g.minAxes[k],x)));
+      if(axisSpread>minH*0.8) continue;
+      const score=Math.max(0,gap)/h + axisSpread/minH;
+      if(score<bestScore){ best=g; bestScore=score; }
     }
-    // 같은 문단의 줄바꿈으로 보이면 merge
-    const vertGap = a._t - prev._b;
-    const overlap = Math.max(0, Math.min(prev._r,a._r) - Math.max(prev._l,a._l));
-    const overlapRate = overlap / Math.max(1, Math.min(prev._w, a._w));
-    const leftClose = Math.abs(a._l - prev._l) <= Math.max(10, prev._w*0.08);
-    const prevEndsSentence = /[。！？!?]$/.test((prev.text||"").trim());
-    const isSoftBreak = (vertGap >= 0 && vertGap <= Math.max(18, prev._h*0.55)) && overlapRate>=0.55 && leftClose && !prevEndsSentence;
-
-    if(isSoftBreak){
-      // merge
-      prev.text = (prev.text||"") + "\n" + (a.text||"");
-      prev._l = Math.min(prev._l,a._l);
-      prev._r = Math.max(prev._r,a._r);
-      prev._t = Math.min(prev._t,a._t);
-      prev._b = Math.max(prev._b,a._b);
-      prev._w = prev._r-prev._l;
-      prev._h = prev._b-prev._t;
-      // polygon은 bbox로 재구성(간단히)
-      prev.polygon = [[prev._l,prev._t],[prev._r,prev._t],[prev._r,prev._b],[prev._l,prev._b]];
+    if(best){
+      best.items.push(a);
+      best.minH=Math.min(best.minH,a.h); best.maxH=Math.max(best.maxH,a.h);
+      a.axes.forEach((x,k)=>{best.minAxes[k]=Math.min(best.minAxes[k],x); best.maxAxes[k]=Math.max(best.maxAxes[k],x);});
     }else{
-      out.push(a);
+      groups.push({items:[a],minH:a.h,maxH:a.h,minAxes:[...a.axes],maxAxes:[...a.axes]});
     }
   }
-  // 원본 속성 정리
-  return out.map(a=>({text:a.text, polygon:a.polygon}));
+  // Only now build the display/save box. No merged geometry feeds back into clustering.
+  return groups.map(g=>{
+    if(g.items.length===1) return {text:g.items[0].a.text,polygon:g.items[0].a.polygon};
+    const l=Math.min(...g.items.map(a=>a.l)), r=Math.max(...g.items.map(a=>a.r));
+    const t=Math.min(...g.items.map(a=>a.t)), b=Math.max(...g.items.map(a=>a.b));
+    return {text:g.items.map(a=>a.a.text||"").join("\n"),polygon:[[l,t],[r,t],[r,b],[l,b]]};
+  });
 }
 
 // ===== 이미지 로드 → OCR (절대진리 부분 변경 없음) =====
