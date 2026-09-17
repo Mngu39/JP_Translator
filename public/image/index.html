@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>JA OCR Overlay</title>
-  <link rel="stylesheet" href="./style.css" />
+  <link rel="stylesheet" href="./style.css?v=20260917-v11" />
 </head>
 <body>
   <main id="stage">
@@ -33,9 +33,15 @@
           <div id="rubyLine" class="ruby-line">…</div>
           <hr class="sep" />
           <div id="transLine" class="trans-line">…</div>
-          <div class="save-row" aria-label="문장박스 저장">
-            <button id="btnSaveSentence" class="savebtn" title="최근 세션에 문장박스 저장" aria-label="최근 세션에 문장박스 저장">💾</button>
-            <button id="btnNewSaveSentence" class="savebtn" title="세션 선택/새 세션으로 문장박스 저장" aria-label="세션 선택 또는 새 세션으로 문장박스 저장">＋</button>
+          <div class="save-row split-save-row" aria-label="문장박스 저장 및 Sudachi 분할">
+            <label class="split-control" title="Sudachi 형태소 분할 크기">
+              <span class="split-labels" aria-hidden="true"><span>A</span><span>B</span><span>C</span></span>
+              <input id="splitModeImage" class="split-range" type="range" min="0" max="2" step="1" value="2" aria-label="Sudachi 분할 모드" aria-valuetext="C" />
+            </label>
+            <div class="save-actions">
+              <button id="btnSaveSentence" class="savebtn" title="최근 세션에 문장박스 저장" aria-label="최근 세션에 문장박스 저장">💾</button>
+              <button id="btnNewSaveSentence" class="savebtn" title="세션 선택/새 세션으로 문장박스 저장" aria-label="세션 선택 또는 새 세션으로 문장박스 저장">＋</button>
+            </div>
           </div>
         </div>
 
@@ -85,6 +91,6 @@
     </div>
   </main>
 
-  <script type="module" src="./src/app.js?v=20260905-v10.2"></script>
+  <script type="module" src="./src/app.js?v=20260917-v11"></script>
 </body>
 </html>

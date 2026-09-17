@@ -48,11 +48,11 @@ export async function gcvOCR(id){
 }
 
 // 후리가나 → 통합 Worker 프록시
-export async function getFurigana(text){
+export async function getFurigana(text, splitMode="C"){
   const r = await fetch(`${getWorkerBase()}/run/furigana`, {
     method:"POST",
     headers: authHeaders({ "content-type":"application/json" }),
-    body: JSON.stringify({ text })
+    body: JSON.stringify({ text, splitMode })
   });
   if(!r.ok) throw new Error(`furigana failed ${r.status}`);
   return await r.json();

@@ -5,7 +5,7 @@ import {
   translateJaKo,
   restructureJa,
   openNaverJaLemma,
-} from "./api.js";
+} from "./api.js?v=20260917-v11";
 import { placeMainPopover } from "./place.js";
 import {
   getLastSession,
@@ -53,10 +53,29 @@ const btnSaveSentence = document.getElementById("btnSaveSentence");
 const btnNewSaveSentence = document.getElementById("btnNewSaveSentence");
 const btnSaveToken = document.getElementById("btnSaveToken");
 const btnNewSaveToken = document.getElementById("btnNewSaveToken");
+const splitModeInput = document.getElementById("splitModeImage");
 
 const subHead   = document.getElementById("subHead");
 const kwrapDiv  = document.getElementById("kwrap");
 const kExplain  = document.getElementById("kExplain");
+
+// ===== 공통 Sudachi split mode =====
+const LS_SPLIT_MODE = "jpTranslatorSudachiSplitMode";
+const SPLIT_MODES = ["A","B","C"];
+function getSplitMode(){
+  const saved = String(localStorage.getItem(LS_SPLIT_MODE) || "C").toUpperCase();
+  return SPLIT_MODES.includes(saved) ? saved : "C";
+}
+function setSplitMode(mode){
+  const value = SPLIT_MODES.includes(mode) ? mode : "C";
+  localStorage.setItem(LS_SPLIT_MODE, value);
+  if(splitModeInput){
+    splitModeInput.value = String(SPLIT_MODES.indexOf(value));
+    splitModeInput.setAttribute("aria-valuetext", value);
+  }
+  return value;
+}
+setSplitMode(getSplitMode());
 
 // ===== 상태 =====
 let annos = [];            // [{text, polygon:[[x,y]..]}, ...]
@@ -123,7 +142,7 @@ function getLemmaReading(lemma){
   lemma = String(lemma||"");
   if(!lemma) return Promise.resolve("");
   if(lemmaReadCache.has(lemma)) return Promise.resolve(lemmaReadCache.get(lemma));
-  return getFurigana(lemma).then(res=>{
+  return getFurigana(lemma, getSplitMode()).then(res=>{
     const rt = readingFromFuriganaTokens(res?.tokens || res?.result || res?.morphs || res?.morphemes || []);
     lemmaReadCache.set(lemma, rt);
     return rt;
@@ -303,7 +322,7 @@ function mergeSoftLineBreakAnnots(list){
 
     // 사진이 열리는 즉시 Cloud Run 후리가나 서버를 미리 깨운다.
     // OCR과 병렬로 실행하며, 결과를 기다리거나 화면 흐름을 막지 않는다.
-    getFurigana("あ").catch(()=>{});
+    getFurigana("あ", getSplitMode()).catch(()=>{});
 
     imgEl.onload = async ()=>{
       const q=tryConsumeQuota();
@@ -727,6 +746,34 @@ function normalizeSentenceFurigana(rubi, text){
   return tokens;
 }
 
+async function reanalyzeCurrentSentenceForSplitMode(){
+  if(!currentSentenceText) return;
+  const text = currentSentenceText;
+  if(splitModeInput) splitModeInput.disabled = true;
+  const promise = getFurigana(text, getSplitMode()).then(r=>normalizeSentenceFurigana(r, text));
+  currentSentenceFuriganaPromise = promise;
+  try{
+    const tokens = await promise;
+    if(currentSentenceText !== text) return;
+    baseSentenceTokens = tokens;
+    currentSentenceFuriganaPromise = Promise.resolve(tokens);
+    // split 조절은 기본 Sudachi 분석을 다시 보는 동작이다. AI 결과는 캐시에만 보존한다.
+    applyAnalysisMode("base");
+  }catch(e){
+    console.error(e);
+    alert(`형태소 분할 변경 실패: ${e?.message || e}`);
+    currentSentenceFuriganaPromise = Promise.resolve(currentSentenceFuriganaTokens || []);
+  }finally{
+    if(splitModeInput) splitModeInput.disabled = false;
+  }
+}
+
+splitModeInput?.addEventListener("change", ()=>{
+  const mode = SPLIT_MODES[Number(splitModeInput.value)] || "C";
+  setSplitMode(mode);
+  reanalyzeCurrentSentenceForSplitMode();
+});
+
 // 메인 팝업 실제 렌더
 async function openMainPopover(anchor, text){
   currentSentenceText = text || "";
@@ -739,7 +786,7 @@ async function openMainPopover(anchor, text){
   if(btnAi){ btnAi.disabled = true; btnAi.textContent = "✦"; }
   updateAiButton();
 
-  currentSentenceFuriganaPromise = getFurigana(text).then(r=>normalizeSentenceFurigana(r, text));
+  currentSentenceFuriganaPromise = getFurigana(text, getSplitMode()).then(r=>normalizeSentenceFurigana(r, text));
   pop.hidden = false;
   showSentenceView();
   setGhost(false);
