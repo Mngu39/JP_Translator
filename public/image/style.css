@@ -431,7 +431,7 @@ img, .box, .popover{
 
 /* ====== Learning log save buttons ====== */
 
-.split-save-row{ justify-content:space-between; }
+.save-row.split-save-row{ justify-content:space-between; }
 .save-actions{ display:flex; align-items:center; gap:6px; }
 .split-control{
   width:112px;
