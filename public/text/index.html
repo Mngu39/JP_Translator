@@ -600,12 +600,36 @@ function normalizeTokens(tokens,text,{ai=false}={}){
 }
 
 /* ===== 원문 렌더 ===== */
-function tokenPieceHtml(t,idx,piece){
+// AI 학습단위(클릭 범위)와 후리가나 표시 단위를 분리한다.
+// AI가 긴 phrase/grammar unit을 만들어도 ruby는 기존 Sudachi 토큰 단위로 표시한다.
+function baseRubyRangeHtml(start,end){
+  const text=String(APP.currentText||"");
+  if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start) return escapeHtml(text.slice(start||0,end||0));
+  let cursor=start, out="";
+  for(const b of (APP.baseTokens||[])){
+    if(!Number.isFinite(b.start)||!Number.isFinite(b.end)||b.end<=start||b.start>=end) continue;
+    const os=Math.max(start,b.start,cursor), oe=Math.min(end,b.end);
+    if(os>cursor) out+=escapeHtml(text.slice(cursor,os));
+    if(oe<=os) continue;
+    const raw=text.slice(os,oe);
+    const full=os===b.start&&oe===b.end&&raw===String(b.surface||"");
+    const rt=full&&b.reading?kata2hira(String(b.reading)):"";
+    out+=(full&&hasKanji(raw)&&rt)
+      ? '<ruby><rb>'+escapeHtml(raw)+'</rb><rt>'+escapeHtml(rt)+'</rt></ruby>'
+      : escapeHtml(raw);
+    cursor=Math.max(cursor,oe);
+  }
+  if(cursor<end) out+=escapeHtml(text.slice(cursor,end));
+  return out;
+}
+function tokenPieceHtml(t,idx,piece,pieceStart){
   if(!piece) return "";
   const rt=t.reading?kata2hira(t.reading):"";
-  const inner=(hasKanji(piece)&&rt)
-    ? '<ruby><rb>'+escapeHtml(piece)+'</rb><rt>'+escapeHtml(rt)+'</rt></ruby>'
-    : escapeHtml(piece);
+  const inner=t.ai
+    ? baseRubyRangeHtml(pieceStart,pieceStart+piece.length)
+    : ((hasKanji(piece)&&rt)
+      ? '<ruby><rb>'+escapeHtml(piece)+'</rb><rt>'+escapeHtml(rt)+'</rt></ruby>'
+      : escapeHtml(piece));
   const clickable=piece.trim()?"1":"0";
   return '<span class="tok'+(t.ai?' ai-unit':'')+'" data-i="'+idx+'" data-clickable="'+clickable+'">'+inner+'</span>';
 }
@@ -613,10 +637,15 @@ function buildRubyTokens(tokens){
   let line=0;
   let out='<span class="line-anchor" data-line="0" aria-hidden="true"></span>';
   (tokens||[]).forEach((t,idx)=>{
-    const parts=String(t.surface||"").split("\n");
+    const surface=String(t.surface||"");
+    const parts=surface.split("\n");
+    const tokenStart=Number.isFinite(t.start)?Number(t.start):0;
+    let localOffset=0;
     parts.forEach((piece,j)=>{
-      out+=tokenPieceHtml(t,idx,piece);
+      out+=tokenPieceHtml(t,idx,piece,tokenStart+localOffset);
+      localOffset+=piece.length;
       if(j<parts.length-1){
+        localOffset+=1; // 원문의 \n
         line++; out+='\n<span class="line-anchor" data-line="'+line+'" aria-hidden="true"></span>';
       }
     });

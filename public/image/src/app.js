@@ -620,6 +620,29 @@ function renderFallbackTokens(container, text){
   });
 }
 
+// AI 학습단위(클릭 범위)와 후리가나 표시 단위를 분리한다.
+// AI가 긴 phrase/grammar unit을 만들더라도 ruby는 기존 Sudachi 토큰 단위로 표시한다.
+function baseRubyRangeHtml(start,end){
+  const text=String(currentSentenceText||"");
+  if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start) return escapeHtml(text.slice(start||0,end||0));
+  let cursor=start, out="";
+  for(const b of (baseSentenceTokens||[])){
+    if(!Number.isFinite(b.start)||!Number.isFinite(b.end)||b.end<=start||b.start>=end) continue;
+    const os=Math.max(start,b.start,cursor), oe=Math.min(end,b.end);
+    if(os>cursor) out+=escapeHtml(text.slice(cursor,os));
+    if(oe<=os) continue;
+    const raw=text.slice(os,oe);
+    const full=os===b.start&&oe===b.end&&raw===String(b.surface||"");
+    const read=full&&b.reading?kataToHira(String(b.reading)):"";
+    out+=(full&&hasKanji(raw)&&read)
+      ? `<ruby lang="ja">${escapeHtml(raw)}<rt>${escapeHtml(read)}</rt></ruby>`
+      : escapeHtml(raw);
+    cursor=Math.max(cursor,oe);
+  }
+  if(cursor<end) out+=escapeHtml(text.slice(cursor,end));
+  return out;
+}
+
 // 실제 후리가나 토큰 구성
 function renderFuriganaTokens(container, tokens){
   container.innerHTML = tokens.map(t=>{
@@ -638,10 +661,12 @@ function renderFuriganaTokens(container, tokens){
       `data-kind="${escapeHtml(t.kind||"word")}"`,
       `data-ai="${t.ai?"1":"0"}"`
     ].join(" ");
-    if(hasKanji(t.surface) && t.reading){
-      return `<span class="tok${t.ai?" ai-unit":""}" lang="ja" ${dataAttr}><ruby lang="ja">${surf}<rt>${read}</rt></ruby></span>`;
-    }
-    return `<span class="tok${t.ai?" ai-unit":""}" lang="ja" ${dataAttr}>${surf}</span>`;
+    const inner=t.ai&&Number.isFinite(t.start)&&Number.isFinite(t.end)
+      ? baseRubyRangeHtml(t.start,t.end)
+      : ((hasKanji(t.surface) && t.reading)
+        ? `<ruby lang="ja">${surf}<rt>${read}</rt></ruby>`
+        : surf);
+    return `<span class="tok${t.ai?" ai-unit":""}" lang="ja" ${dataAttr}>${inner}</span>`;
   }).join("");
 
   container.querySelectorAll(".tok").forEach(span=>{
