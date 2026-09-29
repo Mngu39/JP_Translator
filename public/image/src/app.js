@@ -868,9 +868,12 @@ async function fillTokenView(tok){
   const navUrl = `https://ja.dict.naver.com/#/search?range=all&query=${encodeURIComponent(lookupTerm)}`;
   const headTerm = isAi ? surface : lemma;
   const headReading = isAi ? surfaceReading : ((lemma===surface) ? surfaceReading : "");
+  const aiHeadHtml = isAi && Number.isFinite(tok.start) && Number.isFinite(tok.end)
+    ? baseRubyRangeHtml(tok.start,tok.end)
+    : "";
   subHead.innerHTML = `
     <a id="subLemmaLink" class="surf" lang="ja" href="${navUrl}" target="_blank" rel="noopener noreferrer">${
-      hasKanji(headTerm) && headReading ? `<ruby lang="ja">${escapeHtml(headTerm)}<rt>${escapeHtml(headReading)}</rt></ruby>` : escapeHtml(headTerm)
+      aiHeadHtml || (hasKanji(headTerm) && headReading ? `<ruby lang="ja">${escapeHtml(headTerm)}<rt>${escapeHtml(headReading)}</rt></ruby>` : escapeHtml(headTerm))
     }</a>
     <span class="lemma">${!isAi && surface && surface!==lemma ? `(${escapeHtml(surface)})` : ""}</span>
     <span id="subMeaning" class="meaning"></span>

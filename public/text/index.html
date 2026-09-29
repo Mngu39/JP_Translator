@@ -853,7 +853,9 @@ function openPopBelowToken(tokEl,payload){
   popSub.textContent=(!payload.ai&&surface&&surface!==lemma)?"("+surface+")":"";
   popNote.style.display="none"; popNote.textContent="";
 
-  if(payload.ai && payload.reading && hasKanji(displayTerm)){
+  if(payload.ai && Number.isFinite(payload.start) && Number.isFinite(payload.end)){
+    popLink.innerHTML=baseRubyRangeHtml(payload.start,payload.end) || escapeHtml(displayTerm);
+  }else if(payload.ai && payload.reading && hasKanji(displayTerm)){
     popLink.innerHTML=`<ruby class="ja" lang="ja"><rb>${escapeHtml(displayTerm)}</rb><rt>${escapeHtml(kata2hira(payload.reading))}</rt></ruby>`;
   }else if(hasKanji(lemma)){
     getLemmaReading(lemma).then(rt=>{
