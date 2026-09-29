@@ -72,12 +72,25 @@ export async function translateJaKo(text){
 }
 
 
-// AI 문맥 재구성: 번역/요미가나/학습 단위 경계를 한 번에 보정
+// AI 문장 재구성: 전체 번역 + 학습 단위 경계만 보정
 export async function restructureJa(text,{deeplTranslation="",morphs=[]}={}){
   const r=await fetch(`${getWorkerBase()}/run/restructure`,{
     method:"POST",
     headers:authHeaders({"content-type":"application/json"}),
     body:JSON.stringify({text,deepl_translation:deeplTranslation,morphs})
+  });
+  const raw=await r.text().catch(()=>"");
+  let j={}; try{j=raw?JSON.parse(raw):{};}catch{}
+  if(!r.ok) throw new Error(j?.error?`${j.error}${j.detail?`: ${j.detail}`:""}`:`AI ${r.status}: ${raw.slice(0,240)}`);
+  return j;
+}
+
+// 선택한 단어/AI 학습단위 하나만 원문 문맥을 참고해 설명
+export async function explainUnitJa({text="",translation="",surface="",reading="",lemma="",start=null,end=null}={}){
+  const r=await fetch(`${getWorkerBase()}/run/explain-unit`,{
+    method:"POST",
+    headers:authHeaders({"content-type":"application/json"}),
+    body:JSON.stringify({text,translation,surface,reading,lemma,start,end})
   });
   const raw=await r.text().catch(()=>"");
   let j={}; try{j=raw?JSON.parse(raw):{};}catch{}

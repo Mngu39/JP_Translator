@@ -40,6 +40,7 @@
 
   .tok{padding:1px 2px;border-radius:6px;cursor:pointer}
   .tok:hover{background:#1a2436}
+  .tok.ai-unit{box-shadow:inset 0 -1px 0 rgba(159,179,255,.32)}
   .tok[data-clickable="0"]{cursor:default}
   .tok ruby,.tok rb,.tok rt{pointer-events:none}
 
@@ -179,7 +180,7 @@
       <span id="popSub" class="popSub"></span>
     </div>
     <div class="popTopActions">
-      <button id="popAi" class="pbtn ai-btn" type="button" title="AI 재구성" aria-label="AI 재구성" disabled>✦</button>
+      <button id="popAi" class="pbtn ai-btn" type="button" title="선택 표현 AI 설명" aria-label="선택 표현 AI 설명" disabled>✦</button>
       <button id="popClose" class="pbtn" type="button" title="닫기" aria-label="닫기">✕</button>
     </div>
   </div>
@@ -250,6 +251,7 @@ async function authHeaders(extra={}){
 const FURIGANA_URL = `${API_BASE}/run/furigana`;
 const DEEPL_URL    = `${API_BASE}/text/translate`;
 const RESTRUCTURE_URL = `${API_BASE}/run/restructure`;
+const EXPLAIN_UNIT_URL = `${API_BASE}/run/explain-unit`;
 
 /* ===== 로컬 파일(캐시 버스터) ===== */
 const CROWDANKI_URL = "./deck.json?v=20260227";
@@ -396,6 +398,17 @@ async function callRestructure(text,{deeplTranslation="",morphs=[]}={}){
       return j;
     });
   return withTimeout(fetcher,65000,"AI 재구성");
+}
+async function callExplainUnit({text="",translation="",surface="",reading="",lemma="",start=null,end=null}={}){
+  const body={text,translation,surface,reading,lemma,start,end};
+  const fetcher=async signal=>fetch(EXPLAIN_UNIT_URL,{method:"POST",headers: await authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(body),signal})
+    .then(async r=>{
+      const raw=await r.text().catch(()=>"");
+      let j={}; try{j=raw?JSON.parse(raw):{};}catch{}
+      if(!r.ok) throw new Error(j?.error?`${j.error}${j.detail?`: ${j.detail}`:""}`:`AI ${r.status}: ${raw.slice(0,240)}`);
+      return j;
+    });
+  return withTimeout(fetcher,65000,"AI 설명");
 }
 
 /* ===== 분할(긴 텍스트 보호: 줄 단위 우선) ===== */
@@ -580,6 +593,7 @@ const APP=(function(){
     aiResult:null, analysisMode:"base", aiBusy:false, activeToken:null
   });
 })();
+if(!(APP.unitExplainCache instanceof Map)) APP.unitExplainCache=new Map();
 
 function normalizeTokens(tokens,text,{ai=false}={}){
   let cursor=0;
@@ -684,14 +698,28 @@ function findMappedToken(tokens,oldTok){
   if(Number.isFinite(oldTok.start)&&Number.isFinite(oldTok.end)) return tokens.find(t=>t.start<oldTok.end&&t.end>oldTok.start)||null;
   return tokens.find(t=>t.surface===oldTok.surface)||null;
 }
+function unitExplainKey(tok){
+  if(!tok) return "";
+  const start=Number.isFinite(tok.start)?tok.start:"?";
+  const end=Number.isFinite(tok.end)?tok.end:"?";
+  return `${start}:${end}:${String(tok.surface||"")}`;
+}
 function updateAiButtons(){
-  const active=APP.analysisMode==="ai";
-  for(const btn of [$("#btnAiText"),$("#popAi")]){
-    if(!btn) continue;
-    btn.classList.toggle("active",active);
-    btn.classList.toggle("loading",APP.aiBusy);
-    btn.title=active?"기본 분석으로 돌아가기":(APP.aiResult?"AI 재구성 결과 보기":"AI 재구성");
-    btn.setAttribute("aria-label",btn.title);
+  const sentenceBtn=$("#btnAiText");
+  if(sentenceBtn){
+    const active=APP.analysisMode==="ai";
+    sentenceBtn.classList.toggle("active",active);
+    sentenceBtn.classList.toggle("loading",APP.aiBusy);
+    sentenceBtn.title=active?"기본 분석으로 돌아가기":(APP.aiResult?"AI 재구성 결과 보기":"AI 재구성");
+    sentenceBtn.setAttribute("aria-label",sentenceBtn.title);
+  }
+  const wordBtn=$("#popAi");
+  if(wordBtn){
+    const explained=!!(APP.activeToken && (APP.activeToken.meaning || APP.unitExplainCache.has(unitExplainKey(APP.activeToken))));
+    wordBtn.classList.toggle("active",explained);
+    wordBtn.classList.toggle("loading",APP.aiBusy);
+    wordBtn.title="선택 표현 AI 설명";
+    wordBtn.setAttribute("aria-label",wordBtn.title);
   }
 }
 /* ===== lemma 읽기 캐시 ===== */
@@ -847,6 +875,8 @@ function openPopBelowToken(tokEl,payload){
   const displayTerm=payload.ai ? surface : lemma;
   popAnchorEl=tokEl;
   APP.activeToken=payload;
+  const cachedExplain=APP.unitExplainCache.get(unitExplainKey(payload));
+  if(cachedExplain){ payload.meaning=cachedExplain.meaning||""; payload.note=cachedExplain.note||""; }
 
   popLink.innerHTML=escapeHtml(displayTerm);
   popLink.href=buildNaverSearchUrl(lemma||surface);
@@ -865,7 +895,7 @@ function openPopBelowToken(tokEl,payload){
     });
   }
 
-  if(payload.ai && payload.meaning){
+  if(payload.meaning){
     popDeepl.textContent=payload.meaning;
     if(payload.note){ popNote.textContent=payload.note; popNote.style.display="block"; }
   }else{
@@ -908,22 +938,59 @@ async function toggleAiAnalysis(){
   if(APP.aiBusy||!APP.currentText) return;
   if(APP.aiResult){ applyAnalysisMode(APP.analysisMode==="ai"?"base":"ai"); return; }
   APP.aiBusy=true;
-  for(const btn of [$("#btnAiText"),$("#popAi")]){ if(btn){btn.disabled=true;btn.textContent="…";} }
+  $("#btnAiText").disabled=true;
   updateAiButtons();
   try{
+    // AI 분절은 화면 A/B/C와 별개로 가장 작은 Sudachi A 단위를 경계 후보로 사용한다.
+    const aFuri=await callFurigana(APP.currentText,"A");
+    const aTokens=normalizeTokens(aFuri.tokens||[],APP.currentText);
     const out=await callRestructure(APP.currentText,{
       deeplTranslation:APP.baseTranslation,
-      morphs:APP.baseTokens.map(t=>({surface:t.surface,reading:t.reading||"",lemma:t.lemma||t.surface,start:t.start,end:t.end}))
+      morphs:aTokens.map(t=>({surface:t.surface,reading:t.reading||"",lemma:t.lemma||t.surface,start:t.start,end:t.end}))
     });
     const units=normalizeAiUnits(out?.units||[],APP.currentText);
     if(!units.length) throw new Error("AI가 학습 단위를 반환하지 않았습니다.");
+    APP.unitExplainCache.clear();
     APP.aiResult={translation:String(out?.translation||""),units};
     applyAnalysisMode("ai");
   }catch(e){
     console.error(e); alert(`AI 재구성 실패: ${e?.message||e}`);
   }finally{
     APP.aiBusy=false;
-    for(const btn of [$("#btnAiText"),$("#popAi")]){ if(btn){btn.disabled=false;btn.textContent="✦";} }
+    $("#btnAiText").disabled=false;
+    updateAiButtons();
+  }
+}
+
+async function explainActiveToken(){
+  const tok=APP.activeToken;
+  if(APP.aiBusy||!APP.currentText||!tok) return;
+  const key=unitExplainKey(tok);
+  const cached=APP.unitExplainCache.get(key);
+  if(cached){
+    tok.meaning=cached.meaning||""; tok.note=cached.note||"";
+    if(popAnchorEl) openPopBelowToken(popAnchorEl,tok);
+    return;
+  }
+  APP.aiBusy=true;
+  popAi.disabled=true;
+  updateAiButtons();
+  try{
+    const out=await callExplainUnit({
+      text:APP.currentText,
+      translation:APP.currentTranslation||APP.baseTranslation,
+      surface:tok.surface||"",reading:tok.reading||"",lemma:tok.lemma||tok.surface||"",
+      start:Number.isFinite(tok.start)?tok.start:null,end:Number.isFinite(tok.end)?tok.end:null
+    });
+    const result={meaning:String(out?.meaning||""),note:String(out?.note||"")};
+    APP.unitExplainCache.set(key,result);
+    tok.meaning=result.meaning; tok.note=result.note;
+    if(popAnchorEl) openPopBelowToken(popAnchorEl,tok);
+  }catch(e){
+    console.error(e); alert(`AI 설명 실패: ${e?.message||e}`);
+  }finally{
+    APP.aiBusy=false;
+    popAi.disabled=!APP.currentText||!APP.activeToken;
     updateAiButtons();
   }
 }
@@ -949,7 +1016,7 @@ async function runBoth(){
   if(!text){ const box=$("#inputBox"); if(!box.open) box.open=true; $("#input").focus(); return; }
   closePop();
   APP.currentText=text; APP.baseTokens=[]; APP.currentTokens=[]; APP.baseTranslation=""; APP.currentTranslation="";
-  APP.aiResult=null; APP.analysisMode="base"; APP.aiBusy=false;
+  APP.aiResult=null; APP.analysisMode="base"; APP.aiBusy=false; APP.unitExplainCache.clear();
   $("#btnAiText").disabled=true; popAi.disabled=true; updateAiButtons();
   $("#rubyOut").innerHTML="<em style='color:#9fb0c2'>생성 중…</em>";
   $("#transOut").innerHTML="<em style='color:#9fb0c2'>번역 중…</em>";
@@ -1055,7 +1122,7 @@ async function saveToChosen(btn){const session=await chooseOrCreateSession();if(
     APP.rubyOn=!APP.rubyOn; $("#rubyOut").classList.toggle("ruby-off",!APP.rubyOn); $("#btnToggleRuby").textContent=APP.rubyOn?"루비 끄기":"루비 켜기";
   });
   $("#btnAiText").addEventListener("click",toggleAiAnalysis);
-  popAi.addEventListener("click",e=>{e.stopPropagation();toggleAiAnalysis();});
+  popAi.addEventListener("click",e=>{e.stopPropagation();explainActiveToken();});
   $("#splitModeText").addEventListener("change",()=>{const mode=SPLIT_MODES[Number($("#splitModeText").value)]||"C";setSplitMode(mode);reanalyzeForSplitMode();});
   $("#rubyOut").addEventListener("click",e=>{
     let el=(e.target instanceof Element)?e.target:null; while(el&&!el.classList.contains("tok"))el=el.parentElement;

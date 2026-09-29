@@ -4,8 +4,9 @@ import {
   getFurigana,
   translateJaKo,
   restructureJa,
+  explainUnitJa,
   openNaverJaLemma,
-} from "./api.js?v=20260917-v11";
+} from "./api.js?v=20260929-v12";
 import { placeMainPopover } from "./place.js";
 import {
   getLastSession,
@@ -98,6 +99,7 @@ let baseSentenceTokens = [];
 let aiSentenceResult = null;
 let analysisMode = "base";
 let aiBusy = false;
+const unitExplainCache = new Map();
 
 // ===== Kanji DBs =====
 let KANJI = {};            // attr
@@ -510,7 +512,14 @@ btnAi?.addEventListener("click", async (e)=>{
   e.stopPropagation();
   if(pop.hidden || aiBusy || !currentSentenceText) return;
 
-  // 이미 받아 둔 AI 분석이 있으면 API 재호출 없이 기본/AI 상태만 전환한다.
+  // 토큰뷰의 ✦는 문장 재구성이 아니라 현재 선택 표현 하나만 설명한다.
+  if(inTokenView){
+    if(!lastToken) return;
+    await explainSelectedUnit(lastToken);
+    return;
+  }
+
+  // 문장뷰의 ✦는 전체 번역 + 학습단위 경계만 재구성한다.
   if(aiSentenceResult){
     applyAnalysisMode(analysisMode === "ai" ? "base" : "ai");
     return;
@@ -521,9 +530,12 @@ btnAi?.addEventListener("click", async (e)=>{
   btnAi.classList.add("loading");
   btnAi.textContent = "…";
   try{
+    // AI 경계 후보는 사용자가 고른 A/B/C와 별개로 가장 작은 Sudachi A 단위를 사용한다.
+    const aRaw = await getFurigana(currentSentenceText, "A");
+    const aTokens = normalizeSentenceFurigana(aRaw, currentSentenceText);
     const out = await restructureJa(currentSentenceText, {
       deeplTranslation: baseSentenceTranslation,
-      morphs: baseSentenceTokens.map(t=>({
+      morphs: aTokens.map(t=>({
         surface:t.surface, reading:t.reading||"", lemma:t.lemma||t.surface,
         start:t.start, end:t.end
       }))
@@ -533,6 +545,7 @@ btnAi?.addEventListener("click", async (e)=>{
       units: normalizeAiUnits(out?.units || [], currentSentenceText)
     };
     if(!aiSentenceResult.units.length) throw new Error("AI가 학습 단위를 반환하지 않았습니다.");
+    unitExplainCache.clear();
     applyAnalysisMode("ai");
   }catch(err){
     console.error(err);
@@ -589,6 +602,7 @@ function showSentenceView(){
   viewToken.hidden = true;
   viewSentence.hidden = false;
   updateNavButtons();
+  updateAiButton();
   scheduleReposition();
 }
 
@@ -598,6 +612,7 @@ function showTokenView(tok, {reuse=false}={}){
   viewSentence.hidden = true;
   viewToken.hidden = false;
   updateNavButtons();
+  updateAiButton();
   // 토큰뷰는 내용이 길어질 수 있으므로 배치 갱신
   scheduleReposition();
   if(!reuse) fillTokenView(tok);
@@ -687,6 +702,57 @@ function renderFuriganaTokens(container, tokens){
   });
 }
 
+function unitExplainKey(tok){
+  if(!tok) return "";
+  const start=Number.isFinite(tok.start)?tok.start:"?";
+  const end=Number.isFinite(tok.end)?tok.end:"?";
+  return `${start}:${end}:${String(tok.surface||"")}`;
+}
+
+async function explainSelectedUnit(tok){
+  if(!tok || aiBusy || !currentSentenceText) return;
+  const key=unitExplainKey(tok);
+  const cached=unitExplainCache.get(key);
+  if(cached){
+    tok.meaning=cached.meaning||"";
+    tok.note=cached.note||"";
+    await fillTokenView(tok);
+    updateAiButton();
+    return;
+  }
+  aiBusy=true;
+  if(btnAi){btnAi.disabled=true;btnAi.classList.add("loading");btnAi.textContent="…";}
+  try{
+    const out=await explainUnitJa({
+      text:currentSentenceText,
+      translation:currentSentenceTranslation||baseSentenceTranslation,
+      surface:tok.surface||"",
+      reading:tok.reading||"",
+      lemma:tok.lemma||tok.surface||"",
+      start:Number.isFinite(tok.start)?tok.start:null,
+      end:Number.isFinite(tok.end)?tok.end:null
+    });
+    const result={meaning:String(out?.meaning||""),note:String(out?.note||"")};
+    unitExplainCache.set(key,result);
+    tok.meaning=result.meaning;
+    tok.note=result.note;
+    // 렌더 클릭 payload는 복사본이므로 실제 현재 토큰에도 설명을 반영해 저장/재오픈에서 재사용한다.
+    for(const list of [currentSentenceFuriganaTokens, baseSentenceTokens, aiSentenceResult?.units||[]]){
+      const hit=(list||[]).find(t=>unitExplainKey(t)===key);
+      if(hit){ hit.meaning=result.meaning; hit.note=result.note; }
+    }
+    if(lastToken===tok || unitExplainKey(lastToken)===key){ lastToken=tok; await fillTokenView(tok); }
+  }catch(err){
+    console.error(err);
+    alert(`AI 설명 실패: ${err?.message||err}`);
+  }finally{
+    aiBusy=false;
+    if(btnAi){btnAi.disabled=false;btnAi.classList.remove("loading");btnAi.textContent="✦";}
+    updateAiButton();
+    scheduleReposition();
+  }
+}
+
 function normalizeAiUnits(units, text){
   let cursor = 0;
   const out = [];
@@ -721,8 +787,14 @@ function findMappedToken(tokens, oldTok){
 
 function updateAiButton(){
   if(!btnAi) return;
-  btnAi.classList.toggle("active", analysisMode === "ai");
-  btnAi.title = analysisMode === "ai" ? "기본 분석으로 돌아가기" : (aiSentenceResult ? "AI 재구성 결과 보기" : "AI 재구성");
+  if(inTokenView){
+    const explained = !!(lastToken && (lastToken.meaning || unitExplainCache.has(unitExplainKey(lastToken))));
+    btnAi.classList.toggle("active", explained);
+    btnAi.title = "선택 표현 AI 설명";
+  }else{
+    btnAi.classList.toggle("active", analysisMode === "ai");
+    btnAi.title = analysisMode === "ai" ? "기본 분석으로 돌아가기" : (aiSentenceResult ? "AI 재구성 결과 보기" : "AI 재구성");
+  }
   btnAi.setAttribute("aria-label", btnAi.title);
 }
 
@@ -807,6 +879,7 @@ async function openMainPopover(anchor, text){
   baseSentenceTranslation = "";
   baseSentenceTokens = [];
   aiSentenceResult = null;
+  unitExplainCache.clear();
   analysisMode = "base";
   if(btnAi){ btnAi.disabled = true; btnAi.textContent = "✦"; }
   updateAiButton();
@@ -892,7 +965,7 @@ async function fillTokenView(tok){
   kExplain.innerHTML="";
 
   const mEl = document.getElementById("subMeaning");
-  if(isAi && tok.meaning){
+  if(tok.meaning){
     if(mEl) mEl.textContent = tok.meaning;
     if(tok.note){
       kExplain.style.display="block";
