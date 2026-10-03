@@ -1085,10 +1085,18 @@ function buildTextSavePayload(){
     source_furigana_json:JSON.stringify(ctx.lineTokens),page_url:location.href,created_tz_offset_min:new Date().getTimezoneOffset()
   };
 }
-async function doSaveTextWord(session,btn){
+async function doSaveTextWord(session,btn,payload){
   setSaveButtonState(btn,"saving");
-  try{const payload=buildTextSavePayload();payload.session_id=session.id;const out=await saveItem(payload);if(out?.session)setLastSession(out.session);setSaveButtonState(btn,"saved");}
-  catch(e){console.error(e);alert(`학습로그 저장 실패: ${e?.message||e}`);setSaveButtonState(btn,"error");}
+  try{
+    const body={...(payload||buildTextSavePayload()),session_id:session.id};
+    const out=await saveItem(body);
+    if(out?.session)setLastSession(out.session);
+    setSaveButtonState(btn,"saved");
+  }catch(e){console.error(e);alert(`학습로그 저장 실패: ${e?.message||e}`);setSaveButtonState(btn,"error");}
+}
+function captureTextSavePayload(btn){
+  try{return buildTextSavePayload();}
+  catch(e){console.error(e);alert(`학습로그 저장 실패: ${e?.message||e}`);setSaveButtonState(btn,"error");return null;}
 }
 
 const sessionDlg=$("#sessionDlg"),sessionUrlInput=$("#sessionUrlInput"),sessionCandidates=$("#sessionCandidates"),sessionHint=$("#sessionHint"),sessionUseBtn=$("#sessionUseBtn"),sessionPasteBtn=$("#sessionPasteBtn"),sessionExistingBtn=$("#sessionExistingBtn");
@@ -1111,8 +1119,17 @@ function chooseOrCreateSession(){
     sessionUrlInput.addEventListener("input",onInput);sessionPasteBtn.addEventListener("click",onPaste);sessionExistingBtn.addEventListener("click",onExisting);sessionUseBtn.addEventListener("click",onUse);sessionDlg.addEventListener("close",onClose,{once:true});sessionDlg.showModal();sessionUrlInput.focus();
   });
 }
-async function saveToRecent(btn){let session=getLastSession();if(!session?.id){session=await chooseOrCreateSession();if(!session)return;}await doSaveTextWord(session,btn);}
-async function saveToChosen(btn){const session=await chooseOrCreateSession();if(session)await doSaveTextWord(session,btn);}
+async function saveToRecent(btn){
+  const payload=captureTextSavePayload(btn); if(!payload)return;
+  let session=getLastSession();
+  if(!session?.id){session=await chooseOrCreateSession();if(!session)return;}
+  await doSaveTextWord(session,btn,payload);
+}
+async function saveToChosen(btn){
+  const payload=captureTextSavePayload(btn); if(!payload)return;
+  const session=await chooseOrCreateSession();
+  if(session)await doSaveTextWord(session,btn,payload);
+}
 
 /* ===== 바인딩(중복 방지) ===== */
 (function bindOnce(){
@@ -1128,7 +1145,11 @@ async function saveToChosen(btn){const session=await chooseOrCreateSession();if(
     let el=(e.target instanceof Element)?e.target:null; while(el&&!el.classList.contains("tok"))el=el.parentElement;
     if(!el||el.dataset.clickable==="0")return; const tok=APP.currentTokens[Number(el.dataset.i)]; if(tok)openPopBelowToken(el,tok);
   });
-  document.addEventListener("click",e=>{if(pop.style.display==="block"&&!pop.contains(e.target)&&!e.target.closest(".tok"))closePop();});
+  document.addEventListener("click",e=>{
+    if(pop.style.display!=="block")return;
+    if(sessionDlg?.open && sessionDlg.contains(e.target))return;
+    if(!pop.contains(e.target)&&!e.target.closest(".tok"))closePop();
+  });
   $("#popClose").addEventListener("click",closePop);
   popSave.addEventListener("click",e=>{e.stopPropagation();saveToRecent(popSave);});
   popNewSave.addEventListener("click",e=>{e.stopPropagation();saveToChosen(popNewSave);});
