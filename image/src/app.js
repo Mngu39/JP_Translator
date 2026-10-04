@@ -1,0 +1,1359 @@
+import {
+  getImageById,
+  gcvOCR,
+  getFurigana,
+  translateJaKo,
+  restructureJa,
+  explainUnitJa,
+  openNaverJaLemma,
+} from "./api.js?v=20261004-v13";
+import { placeMainPopover } from "./place.js";
+import {
+  getLastSession,
+  setLastSession,
+  searchSessions,
+  recentSessions,
+  resolveSession,
+  saveItem,
+  downscaleImageElement,
+} from "./log.js?v=20261004-v8";
+
+const stage     = document.getElementById("stage");
+const imgEl     = document.getElementById("img");
+const overlay   = document.getElementById("overlay");
+const hint      = document.getElementById("hint");
+
+const pop       = document.getElementById("pop");
+const popBody   = document.getElementById("popBody");
+const viewSentence = document.getElementById("viewSentence");
+const viewToken    = document.getElementById("viewToken");
+
+const btnBack   = document.getElementById("btnBack");
+const btnFwd    = document.getElementById("btnFwd");
+const btnAi     = document.getElementById("btnAi");
+const btnGhost  = document.getElementById("btnGhost");
+const btnEdit   = document.getElementById("btnEdit");
+const btnClose  = document.getElementById("btnClose");
+
+const rubyLine  = document.getElementById("rubyLine");
+const transLine = document.getElementById("transLine");
+
+const editDlg   = document.getElementById("editDlg");
+const editInput = document.getElementById("editInput");
+const editOkBtn = document.getElementById("editOk");
+
+const sessionDlg = document.getElementById("sessionDlg");
+const sessionUrlInput = document.getElementById("sessionUrlInput");
+const sessionCandidates = document.getElementById("sessionCandidates");
+const sessionHint = document.getElementById("sessionHint");
+const sessionUseBtn = document.getElementById("sessionUseBtn");
+const sessionPasteBtn = document.getElementById("sessionPasteBtn");
+const sessionExistingBtn = document.getElementById("sessionExistingBtn");
+
+const btnSaveSentence = document.getElementById("btnSaveSentence");
+const btnNewSaveSentence = document.getElementById("btnNewSaveSentence");
+const btnSaveToken = document.getElementById("btnSaveToken");
+const btnNewSaveToken = document.getElementById("btnNewSaveToken");
+const splitModeInput = document.getElementById("splitModeImage");
+
+const subHead   = document.getElementById("subHead");
+const kwrapDiv  = document.getElementById("kwrap");
+const kExplain  = document.getElementById("kExplain");
+
+// ===== 공통 Sudachi split mode =====
+const LS_SPLIT_MODE = "jpTranslatorSudachiSplitMode";
+const SPLIT_MODES = ["A","B","C"];
+function getSplitMode(){
+  const saved = String(localStorage.getItem(LS_SPLIT_MODE) || "C").toUpperCase();
+  return SPLIT_MODES.includes(saved) ? saved : "C";
+}
+function setSplitMode(mode){
+  const value = SPLIT_MODES.includes(mode) ? mode : "C";
+  localStorage.setItem(LS_SPLIT_MODE, value);
+  if(splitModeInput){
+    splitModeInput.value = String(SPLIT_MODES.indexOf(value));
+    splitModeInput.setAttribute("aria-valuetext", value);
+  }
+  return value;
+}
+setSplitMode(getSplitMode());
+
+// ===== 상태 =====
+let annos = [];            // [{text, polygon:[[x,y]..]}, ...]
+let selectedIdxs = [];     // [idx, ...] (선택 순서)
+let ghostMode = false;
+
+let lastToken = null;      // {surface, lemma, reading, start, end}
+let inTokenView = false;
+
+// ===== Learning log state =====
+let currentImageId = "";
+let currentSentenceText = "";
+let currentSentenceTranslation = "";
+let currentSentenceFuriganaTokens = [];
+let currentSentenceFuriganaPromise = Promise.resolve([]);
+
+// 기본 분석은 항상 보존하고, AI 재구성은 선택적으로 겹쳐 쓴다.
+let baseSentenceTranslation = "";
+let baseSentenceTokens = [];
+let aiSentenceResult = null;
+let analysisMode = "base";
+let aiBusy = false;
+const unitExplainCache = new Map();
+
+// ===== Kanji DBs =====
+let KANJI = {};            // attr
+let ANKI  = {};            // deck (anki)
+
+// ===== 유틸 =====
+const escapeHtml = s => (s||"").replace(/[&<>"']/g, m=>({
+  "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+}[m]));
+const stripHtml = s => (s||"").toString().replace(/<[^>]+>/g,"").trim();
+const hasKanji = s => /[\u3400-\u9FFF]/.test(s||"");
+const kataToHira = s =>
+  (s||"").replace(/[\u30a1-\u30f6]/g, ch=>String.fromCharCode(ch.charCodeAt(0)-0x60));
+
+function nl2br(s){ return escapeHtml(s).replace(/\n/g,"<br>"); }
+
+function getVB(){
+  return (globalThis.visualViewport || {
+    width: innerWidth,
+    height: innerHeight,
+    offsetTop: scrollY,
+    offsetLeft: scrollX
+  });
+}
+
+function uniq(arr){
+  return Array.from(new Set(arr));
+}
+
+// ===== lemma 읽기 캐시 =====
+// 토큰 상세 화면에서는 텍스트번역기처럼 “기본형 + 기본형 요미가나”를 보여주기 위해
+// 표면형 reading을 그대로 쓰지 않고 lemma를 다시 후리가나 API에 보내 reading을 얻는다.
+const lemmaReadCache = new Map();
+function readingFromFuriganaTokens(tokens){
+  return (tokens||[]).map(t=>{
+    const surf = String(t.surface || t.text || "");
+    const read = String(t.reading || t.read || t.kana || "");
+    return read ? kataToHira(read) : surf;
+  }).join("");
+}
+function getLemmaReading(lemma){
+  lemma = String(lemma||"");
+  if(!lemma) return Promise.resolve("");
+  if(lemmaReadCache.has(lemma)) return Promise.resolve(lemmaReadCache.get(lemma));
+  return getFurigana(lemma, getSplitMode()).then(res=>{
+    const rt = readingFromFuriganaTokens(res?.tokens || res?.result || res?.morphs || res?.morphemes || []);
+    lemmaReadCache.set(lemma, rt);
+    return rt;
+  }).catch(()=>{
+    lemmaReadCache.set(lemma, "");
+    return "";
+  });
+}
+
+// ====== 사용량 카운트 =====
+function quotaKey(){
+  const d=new Date();
+  return `gcv_quota_${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}`;
+}
+function tryConsumeQuota(){
+  const k=quotaKey();
+  const n=+(localStorage.getItem(k)||0);
+  if(n>=1000) return {ok:false,key:k,n};
+  localStorage.setItem(k,n+1);
+  return {ok:true,key:k,n:n+1};
+}
+function rollbackQuota(k){
+  const n=+(localStorage.getItem(k)||1);
+  localStorage.setItem(k,Math.max(0,n-1));
+}
+
+// ====== DB 로드: 통합 JP_Translator repo 내부 사전 파일 사용 =====
+async function fetchFirstJson(urls){
+  for(const url of urls){
+    try{
+      const r = await fetch(url, { cache:"no-store" });
+      if(r.ok) return await r.json();
+    }catch{ /* ignore */ }
+  }
+  return null;
+}
+
+function parseCrowdAnki(deck){
+  if(!deck) return {};
+  const midToFieldNames = {};
+  const models = deck.note_models || deck.models || [];
+  for(const m of models){
+    const mid = m.id ?? m.mid ?? m.modelId;
+    const flds = m.flds || m.fields || [];
+    const names = flds.map(f => (f.name||f.fldName||"").toString());
+    if(mid!=null) midToFieldNames[mid] = names;
+  }
+
+  const candidatesExpr = ["Expression","Kanji","漢字","한자","표현","expression"];
+  const candidatesMeaning = ["Meaning","훈음","뜻","meaning","Gloss","gloss"];
+  const candidatesExplain = ["Explain","설명","비고","Notes","note","explain"];
+  const candidatesUnit = ["Unit","순번","번호","unit"];
+  const candidatesTheme = ["Kanji Theme","Theme","목차","theme","kanji theme"];
+
+  const pickIndex = (names, candidates) => {
+    const lower = names.map(n=>n.toLowerCase());
+    for(const c of candidates){
+      const i = lower.indexOf(c.toLowerCase());
+      if(i>=0) return i;
+    }
+    // 느슨한 포함 검색
+    for(const c of candidates){
+      const cc = c.toLowerCase();
+      const i = lower.findIndex(n => n.includes(cc));
+      if(i>=0) return i;
+    }
+    return -1;
+  };
+
+  const out = {};
+  const stack=[deck];
+  while(stack.length){
+    const node = stack.pop();
+    if(Array.isArray(node?.children)) stack.push(...node.children);
+    const notes = node?.notes || node?.cards || [];
+    if(Array.isArray(notes)){
+      for(const n of notes){
+        const f = n.fields || n.flds || [];
+        const mid = n.mid ?? n.modelId ?? n.note_model_id;
+        const names = midToFieldNames[mid] || [];
+        const idxExpr = pickIndex(names, candidatesExpr);
+        const idxMeaning = pickIndex(names, candidatesMeaning);
+        const idxExplain = pickIndex(names, candidatesExplain);
+        const idxUnit = pickIndex(names, candidatesUnit);
+        const idxTheme = pickIndex(names, candidatesTheme);
+
+        // 폴백(구버전 덱)
+        const expr = stripHtml(f[idxExpr>=0?idxExpr:1] ?? "");
+        if(!expr || expr.length!==1) continue;
+
+        const mean = stripHtml(f[idxMeaning>=0?idxMeaning:2] ?? "");
+        let explain = stripHtml(f[idxExplain>=0?idxExplain:3] ?? "");
+
+        const unit = stripHtml(f[idxUnit] ?? "");
+        const theme = stripHtml(f[idxTheme] ?? "");
+        if(!explain){
+          const line = [theme, unit?`#${unit}`:""].filter(Boolean).join(" ");
+          explain = line;
+        }
+
+        if(!out[expr]) out[expr] = { mean, explain, unit, theme };
+      }
+    }
+  }
+  return out;
+}
+
+async function loadDBs(){
+  // /JP_Translator/image/ 에서 /JP_Translator/text/ 내부의 공용 사전 파일을 읽는다.
+  // 기존 Test-deepl-furigana repo에는 더 이상 의존하지 않는다.
+  const [j1, j2] = await Promise.all([
+    fetchFirstJson(["../text/kanji_ko_attr_irreg.min.json?v=20260719"]),
+    fetchFirstJson(["../text/deck.json?v=20260719"]),
+  ]);
+
+  if(j1) KANJI = j1 || {};
+  if(j2) ANKI = parseCrowdAnki(j2);
+}
+const DB_READY = loadDBs();
+
+// ===== OCR: 원본 박스/글자 높이를 보존한 자막 그룹화 =====
+function mergeSoftLineBreakAnnots(list){
+  if(!Array.isArray(list)) return [];
+  const boxes=list.map((a,i)=>{
+    const v=a.polygon;
+    if(!Array.isArray(v) || v.length!==4 || !v.every(p=>Array.isArray(p) && p.length>=2 && Number.isFinite(p[0]) && Number.isFinite(p[1]))) return null;
+    const xs=v.map(p=>p[0]), ys=v.map(p=>p[1]);
+    const l=Math.min(...xs), r=Math.max(...xs), t=Math.min(...ys), b=Math.max(...ys);
+    if(r<=l || b<=t) return null;
+    const h=Number(a.charHeight);
+    // Unknown metrics (old Worker / OCR fallback) and rotated/vertical text stay intact.
+    const level=Math.abs(v[1][1]-v[0][1])<=Math.abs(v[1][0]-v[0][0])*0.35 &&
+      Math.abs(v[2][1]-v[3][1])<=Math.abs(v[2][0]-v[3][0])*0.35;
+    return {a,i,l,r,t,b,h,axes:[l,(l+r)/2,r], mergeable:Number.isFinite(h) && h>0 && a.horizontal===true && level};
+  }).filter(Boolean).sort((a,b)=>a.t-b.t || a.l-b.l || a.i-b.i);
+
+  const groups=[];
+  for(const a of boxes){
+    let best=null, bestScore=Infinity;
+    if(a.mergeable) for(const g of groups){
+      const prev=g.items[g.items.length-1];
+      if(!prev.mergeable) continue;
+      const minH=Math.min(g.minH,a.h), maxH=Math.max(g.maxH,a.h);
+      if(minH/maxH<0.72) continue;
+      const h=Math.min(prev.h,a.h), gap=a.t-prev.b;
+      // Allow a little OCR box overlap, but never join side-by-side boxes as lines.
+      if(a.t-prev.t<h*0.5 || gap < -h*0.15 || gap>h*1.2) continue;
+      const axisSpread=Math.min(...a.axes.map((x,k)=>Math.max(g.maxAxes[k],x)-Math.min(g.minAxes[k],x)));
+      if(axisSpread>minH*0.8) continue;
+      const score=Math.max(0,gap)/h + axisSpread/minH;
+      if(score<bestScore){ best=g; bestScore=score; }
+    }
+    if(best){
+      best.items.push(a);
+      best.minH=Math.min(best.minH,a.h); best.maxH=Math.max(best.maxH,a.h);
+      a.axes.forEach((x,k)=>{best.minAxes[k]=Math.min(best.minAxes[k],x); best.maxAxes[k]=Math.max(best.maxAxes[k],x);});
+    }else{
+      groups.push({items:[a],minH:a.h,maxH:a.h,minAxes:[...a.axes],maxAxes:[...a.axes]});
+    }
+  }
+  // Only now build the display/save box. No merged geometry feeds back into clustering.
+  return groups.map(g=>{
+    if(g.items.length===1) return {text:g.items[0].a.text,polygon:g.items[0].a.polygon};
+    const l=Math.min(...g.items.map(a=>a.l)), r=Math.max(...g.items.map(a=>a.r));
+    const t=Math.min(...g.items.map(a=>a.t)), b=Math.max(...g.items.map(a=>a.b));
+    return {text:g.items.map(a=>a.a.text||"").join("\n"),polygon:[[l,t],[r,t],[r,b],[l,b]]};
+  });
+}
+
+// ===== 이미지 로드 → OCR (절대진리 부분 변경 없음) =====
+(async function bootstrap(){
+  try{
+    const qs=new URLSearchParams(location.search);
+    const id=qs.get("id");
+    if(!id) throw new Error("?id= 필요");
+    currentImageId = id;
+
+    // 사진이 열리는 즉시 Cloud Run 후리가나 서버를 미리 깨운다.
+    // OCR과 병렬로 실행하며, 결과를 기다리거나 화면 흐름을 막지 않는다.
+    getFurigana("あ", getSplitMode()).catch(()=>{});
+
+    imgEl.onload = async ()=>{
+      const q=tryConsumeQuota();
+      if(!q.ok){
+        hint.textContent="월간 무료 사용량 초과";
+        return;
+      }
+      try{
+        hint.textContent="OCR(Google) 중…";
+        annos = mergeSoftLineBreakAnnots(await gcvOCR(id));
+        if(!annos.length){
+          hint.textContent="문장을 찾지 못했습니다.";
+          return;
+        }
+        hint.textContent="문장상자를 탭하세요";
+        renderOverlay(true);
+      }catch(e){
+        rollbackQuota(q.key);
+        console.error(e);
+        const msg = String(e?.message || e || "");
+        const short = msg.match(/(gcv_[a-z_]+|GCV\s+\d{3})/i)?.[1] || "";
+        hint.textContent = short ? `OCR 오류 · ${short}` : "OCR 오류";
+      }
+    };
+
+    imgEl.onerror = ()=>{
+      hint.textContent="이미지를 불러오지 못했습니다";
+    };
+
+    // 절대 건드리지 않는 라인
+    imgEl.src = await getImageById(id);
+
+  }catch(e){
+    hint.textContent = e.message;
+  }
+})();
+
+// ===== OCR 박스 렌더/선택 =====
+function renderOverlay(keepSelection=false){
+  const rect=imgEl.getBoundingClientRect();
+  overlay.style.width  = rect.width +"px";
+  overlay.style.height = rect.height+"px";
+
+  const sx = rect.width  / imgEl.naturalWidth;
+  const sy = rect.height / imgEl.naturalHeight;
+
+  overlay.innerHTML="";
+  for(let i=0;i<annos.length;i++){
+    const a = annos[i];
+    const [p0,p1,p2,p3]=a.polygon;
+    const l=Math.min(p0[0],p3[0])*sx;
+    const t=Math.min(p0[1],p1[1])*sy;
+    const r=Math.max(p1[0],p2[0])*sx;
+    const b=Math.max(p2[1],p3[1])*sy;
+    const w=Math.max(6,r-l);
+    const h=Math.max(6,b-t);
+
+    const box=document.createElement("div");
+    box.className="box";
+    box.dataset.idx = String(i);
+    box.dataset.text = a.text||"";
+    Object.assign(box.style,{
+      left:l+"px",
+      top:t+"px",
+      width:w+"px",
+      height:h+"px"
+    });
+
+    box.addEventListener("click",ev=>{
+      ev.stopPropagation();
+      toggleSelect(box);
+    });
+
+    overlay.appendChild(box);
+  }
+
+  if(keepSelection){
+    // 선택 복원
+    applySelectionVisuals();
+  }else{
+    selectedIdxs = [];
+  }
+}
+
+function getBoxByIdx(idx){
+  return overlay.querySelector(`.box[data-idx="${idx}"]`);
+}
+
+function applySelectionVisuals(){
+  // 모든 박스 ord 제거/선택 해제
+  overlay.querySelectorAll(".box.selected").forEach(b=>{
+    b.classList.remove("selected");
+    b.querySelector(".ord")?.remove();
+  });
+
+  selectedIdxs.forEach((idx,order)=>{
+    const box = getBoxByIdx(idx);
+    if(!box) return;
+    box.classList.add("selected");
+    const tag=document.createElement("span");
+    tag.className="ord";
+    tag.textContent=String(order+1);
+    box.appendChild(tag);
+  });
+}
+
+function selectedText(){
+  return selectedIdxs.map(i => annos[i]?.text || "").join("");
+}
+
+function currentAnchorEl(){
+  const idx = selectedIdxs[0];
+  if(idx==null) return null;
+  return getBoxByIdx(idx);
+}
+
+function clearSelection(){
+  selectedIdxs = [];
+  applySelectionVisuals();
+  hidePop();
+}
+
+function toggleSelect(box){
+  const idx = Number(box.dataset.idx);
+  const pos = selectedIdxs.indexOf(idx);
+  if(pos>=0){
+    selectedIdxs.splice(pos,1);
+  }else{
+    selectedIdxs.push(idx);
+  }
+  applySelectionVisuals();
+
+  if(selectedIdxs.length){
+    if(ghostMode){
+      // 선택 변경이 있으면 자동으로 불투명 복귀
+      setGhost(false);
+    }
+    openMainFromSelection();
+  }else{
+    hidePop();
+  }
+}
+
+function hidePop(){
+  pop.hidden = true;
+  setGhost(false);
+  inTokenView = false;
+  lastToken = null;
+  updateNavButtons();
+}
+
+// ===== 메인 팝업 =====
+let repositionQueued = false;
+function scheduleReposition(){
+  if(pop.hidden) return;
+  if(repositionQueued) return;
+  repositionQueued = true;
+  requestAnimationFrame(()=>{
+    repositionQueued=false;
+    const anchor = currentAnchorEl();
+    if(anchor && !pop.hidden){
+      placeMainPopover(anchor, pop, 8);
+    }
+  });
+}
+
+function openMainFromSelection(){
+  const anchor = currentAnchorEl();
+  if(!anchor) return;
+  openMainPopover(anchor, selectedText());
+}
+
+function setGhost(on){
+  ghostMode = !!on;
+  pop.classList.toggle("ghost", ghostMode);
+}
+
+btnGhost.addEventListener("click",(e)=>{
+  e.stopPropagation();
+  if(pop.hidden) return;
+  setGhost(!ghostMode);
+});
+
+btnAi?.addEventListener("click", async (e)=>{
+  e.stopPropagation();
+  if(pop.hidden || aiBusy || !currentSentenceText) return;
+
+  // 토큰뷰의 ✦는 문장 재구성이 아니라 현재 선택 표현 하나만 설명한다.
+  if(inTokenView){
+    if(!lastToken) return;
+    await explainSelectedUnit(lastToken);
+    return;
+  }
+
+  // 문장뷰의 ✦는 전체 번역 + 학습단위 경계만 재구성한다.
+  if(aiSentenceResult){
+    applyAnalysisMode(analysisMode === "ai" ? "base" : "ai");
+    return;
+  }
+
+  aiBusy = true;
+  btnAi.disabled = true;
+  btnAi.classList.add("loading");
+  btnAi.textContent = "…";
+  try{
+    // 1차 AI 재구성은 원문만 사용한다. Sudachi/DeepL은 분절 판단에 전달하지 않는다.
+    const out = await restructureJa(currentSentenceText);
+    const aiRubyTokens = normalizeSentenceFurigana({tokens:out?.ruby_tokens || []}, currentSentenceText);
+    aiSentenceResult = {
+      translation: String(out?.translation || ""),
+      units: normalizeAiUnits(out?.units || [], currentSentenceText),
+      rubyTokens: aiRubyTokens.length ? aiRubyTokens : baseSentenceTokens
+    };
+    if(!aiSentenceResult.units.length) throw new Error("AI가 학습 단위를 반환하지 않았습니다.");
+    unitExplainCache.clear();
+    applyAnalysisMode("ai");
+  }catch(err){
+    console.error(err);
+    alert(`AI 재구성 실패: ${err?.message || err}`);
+  }finally{
+    aiBusy = false;
+    btnAi.disabled = false;
+    btnAi.classList.remove("loading");
+    btnAi.textContent = "✦";
+    updateAiButton();
+  }
+});
+
+btnClose.addEventListener("click",(e)=>{
+  e.stopPropagation();
+  clearSelection();
+});
+
+btnEdit.addEventListener("click",(e)=>{
+  e.stopPropagation();
+  editInput.value = selectedText() || "";
+  editDlg.showModal();
+});
+
+editOkBtn.addEventListener("click",()=>{
+  const t = editInput.value.trim();
+  editDlg.close();
+  if(!t) return;
+  const anchor = currentAnchorEl();
+  if(anchor) openMainPopover(anchor, t, { forceText:t });
+});
+
+// Back/Forward: 문장뷰 <-> 토큰뷰 전환
+btnBack.addEventListener("click",(e)=>{
+  e.stopPropagation();
+  if(inTokenView){
+    showSentenceView();
+  }
+});
+btnFwd.addEventListener("click",(e)=>{
+  e.stopPropagation();
+  if(!inTokenView && lastToken){
+    showTokenView(lastToken, {reuse:true});
+  }
+});
+
+function updateNavButtons(){
+  btnBack.disabled = !inTokenView;
+  btnFwd.disabled  = inTokenView || !lastToken;
+}
+
+function showSentenceView(){
+  inTokenView = false;
+  viewToken.hidden = true;
+  viewSentence.hidden = false;
+  updateNavButtons();
+  updateAiButton();
+  scheduleReposition();
+}
+
+function showTokenView(tok, {reuse=false}={}){
+  inTokenView = true;
+  lastToken = tok;
+  viewSentence.hidden = true;
+  viewToken.hidden = false;
+  updateNavButtons();
+  updateAiButton();
+  // 토큰뷰는 내용이 길어질 수 있으므로 배치 갱신
+  scheduleReposition();
+  if(!reuse) fillTokenView(tok);
+}
+
+// fallback 토큰: 후리가나 없어도 먼저 clickable하게
+function renderFallbackTokens(container, text){
+  container.innerHTML="";
+  text.split(/(\s+)/).forEach(tok=>{
+    if(!tok.trim()) return;
+    const span=document.createElement("span");
+    span.className="tok";
+    span.lang="ja";
+    span.textContent=tok;
+    span.addEventListener("click",ev=>{
+      ev.stopPropagation();
+      showTokenView({ surface: tok, reading:"", lemma: tok });
+    });
+    container.appendChild(span);
+  });
+}
+
+// AI 모드에서는 확정된 학습 unit 전체의 검수된 reading으로 ruby를 표시한다.
+function baseRubyRangeHtml(start,end){
+  const text=String(currentSentenceText||"");
+  if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start) return escapeHtml(text.slice(start||0,end||0));
+  let cursor=start, out="";
+  const rubyTokens=(analysisMode==="ai" && aiSentenceResult?.rubyTokens?.length)
+    ? aiSentenceResult.rubyTokens
+    : (baseSentenceTokens||[]);
+  for(const b of rubyTokens){
+    if(!Number.isFinite(b.start)||!Number.isFinite(b.end)||b.end<=start||b.start>=end) continue;
+    const os=Math.max(start,b.start,cursor), oe=Math.min(end,b.end);
+    if(os>cursor) out+=escapeHtml(text.slice(cursor,os));
+    if(oe<=os) continue;
+    const raw=text.slice(os,oe);
+    const full=os===b.start&&oe===b.end&&raw===String(b.surface||"");
+    const read=full&&b.reading?kataToHira(String(b.reading)):"";
+    out+=(full&&hasKanji(raw)&&read)
+      ? `<ruby lang="ja">${escapeHtml(raw)}<rt>${escapeHtml(read)}</rt></ruby>`
+      : escapeHtml(raw);
+    cursor=Math.max(cursor,oe);
+  }
+  if(cursor<end) out+=escapeHtml(text.slice(cursor,end));
+  return out;
+}
+
+// 실제 후리가나 토큰 구성
+function renderFuriganaTokens(container, tokens){
+  container.innerHTML = tokens.map(t=>{
+    const surf = escapeHtml(t.surface);
+    const read = escapeHtml(t.reading||"");
+    const start = Number.isFinite(t.start) ? String(t.start) : "";
+    const end = Number.isFinite(t.end) ? String(t.end) : "";
+    const dataAttr = [
+      `data-surf="${surf}"`,
+      `data-lemma="${escapeHtml(t.lemma||t.surface)}"`,
+      `data-read="${read}"`,
+      `data-start="${start}"`,
+      `data-end="${end}"`,
+      `data-meaning="${escapeHtml(t.meaning||"")}"`,
+      `data-note="${escapeHtml(t.note||"")}"`,
+      `data-kind="${escapeHtml(t.kind||"word")}"`,
+      `data-ai="${t.ai?"1":"0"}"`
+    ].join(" ");
+    const inner=t.ai&&Number.isFinite(t.start)&&Number.isFinite(t.end)
+      ? baseRubyRangeHtml(t.start,t.end)
+      : ((hasKanji(t.surface) && t.reading)
+        ? `<ruby lang="ja">${surf}<rt>${read}</rt></ruby>`
+        : surf);
+    return `<span class="tok${t.ai?" ai-unit":""}" lang="ja" ${dataAttr}>${inner}</span>`;
+  }).join("");
+
+  container.querySelectorAll(".tok").forEach(span=>{
+    span.addEventListener("click",ev=>{
+      ev.stopPropagation();
+      showTokenView({
+        surface: span.dataset.surf || "",
+        lemma:   span.dataset.lemma || span.dataset.surf || "",
+        reading: span.dataset.read  || "",
+        start:   span.dataset.start === "" ? null : Number(span.dataset.start),
+        end:     span.dataset.end === "" ? null : Number(span.dataset.end),
+        meaning: span.dataset.meaning || "",
+        note: span.dataset.note || "",
+        kind: span.dataset.kind || "word",
+        ai: span.dataset.ai === "1"
+      });
+    });
+  });
+}
+
+function unitExplainKey(tok){
+  if(!tok) return "";
+  const start=Number.isFinite(tok.start)?tok.start:"?";
+  const end=Number.isFinite(tok.end)?tok.end:"?";
+  return `${start}:${end}:${String(tok.surface||"")}`;
+}
+
+async function explainSelectedUnit(tok){
+  if(!tok || aiBusy || !currentSentenceText) return;
+  const key=unitExplainKey(tok);
+  const cached=unitExplainCache.get(key);
+  if(cached){
+    tok.meaning=cached.meaning||"";
+    tok.note=cached.note||"";
+    await fillTokenView(tok);
+    updateAiButton();
+    return;
+  }
+  aiBusy=true;
+  if(btnAi){btnAi.disabled=true;btnAi.classList.add("loading");btnAi.textContent="…";}
+  try{
+    const out=await explainUnitJa({
+      text:currentSentenceText,
+      surface:tok.surface||"",
+      start:Number.isFinite(tok.start)?tok.start:null,
+      end:Number.isFinite(tok.end)?tok.end:null
+    });
+    const result={meaning:String(out?.meaning||""),note:String(out?.note||"")};
+    unitExplainCache.set(key,result);
+    tok.meaning=result.meaning;
+    tok.note=result.note;
+    // 렌더 클릭 payload는 복사본이므로 실제 현재 토큰에도 설명을 반영해 저장/재오픈에서 재사용한다.
+    for(const list of [currentSentenceFuriganaTokens, baseSentenceTokens, aiSentenceResult?.units||[]]){
+      const hit=(list||[]).find(t=>unitExplainKey(t)===key);
+      if(hit){ hit.meaning=result.meaning; hit.note=result.note; }
+    }
+    if(lastToken===tok || unitExplainKey(lastToken)===key){ lastToken=tok; await fillTokenView(tok); }
+  }catch(err){
+    console.error(err);
+    alert(`AI 설명 실패: ${err?.message||err}`);
+  }finally{
+    aiBusy=false;
+    if(btnAi){btnAi.disabled=false;btnAi.classList.remove("loading");btnAi.textContent="✦";}
+    updateAiButton();
+    scheduleReposition();
+  }
+}
+
+function normalizeAiUnits(units, text){
+  let cursor = 0;
+  const out = [];
+  for(const raw of units || []){
+    const surface = String(raw?.surface || "");
+    if(!surface) continue;
+    const pos = text.indexOf(surface, cursor);
+    if(pos < 0) return [];
+    const start = Number.isFinite(raw?.start) ? Number(raw.start) : pos;
+    const end = Number.isFinite(raw?.end) ? Number(raw.end) : start + surface.length;
+    out.push({
+      surface,
+      reading:kataToHira(String(raw?.reading||"")),
+      lemma:String(raw?.lemma||surface),
+      meaning:String(raw?.meaning||""),
+      note:String(raw?.note||""),
+      kind:String(raw?.kind||"word"),
+      start,end,ai:true
+    });
+    cursor = pos + surface.length;
+  }
+  return out.map((t,i)=>({ ...t, start:i?out.slice(0,i).reduce((n,x)=>n+x.surface.length,0):0, end:out.slice(0,i+1).reduce((n,x)=>n+x.surface.length,0) }));
+}
+
+function findMappedToken(tokens, oldTok){
+  if(!oldTok || !tokens?.length) return null;
+  if(Number.isFinite(oldTok.start) && Number.isFinite(oldTok.end)){
+    return tokens.find(t=>Number.isFinite(t.start)&&Number.isFinite(t.end)&&t.start < oldTok.end && t.end > oldTok.start) || null;
+  }
+  return tokens.find(t=>t.surface===oldTok.surface) || null;
+}
+
+function updateAiButton(){
+  if(!btnAi) return;
+  if(inTokenView){
+    const explained = !!(lastToken && (lastToken.meaning || unitExplainCache.has(unitExplainKey(lastToken))));
+    btnAi.classList.toggle("active", explained);
+    btnAi.title = "선택 표현 AI 설명";
+  }else{
+    btnAi.classList.toggle("active", analysisMode === "ai");
+    btnAi.title = analysisMode === "ai" ? "기본 분석으로 돌아가기" : (aiSentenceResult ? "AI 재구성 결과 보기" : "AI 재구성");
+  }
+  btnAi.setAttribute("aria-label", btnAi.title);
+}
+
+function applyAnalysisMode(mode){
+  analysisMode = (mode === "ai" && aiSentenceResult) ? "ai" : "base";
+  const tokens = analysisMode === "ai" ? aiSentenceResult.units : baseSentenceTokens;
+  const translation = analysisMode === "ai" ? aiSentenceResult.translation : baseSentenceTranslation;
+  const oldToken = lastToken ? {...lastToken} : null;
+
+  currentSentenceFuriganaTokens = tokens || [];
+  currentSentenceFuriganaPromise = Promise.resolve(currentSentenceFuriganaTokens);
+  currentSentenceTranslation = translation || "";
+  renderFuriganaTokens(rubyLine, currentSentenceFuriganaTokens);
+  transLine.textContent = currentSentenceTranslation || "(번역 없음)";
+  updateAiButton();
+
+  if(inTokenView && oldToken){
+    const mapped = findMappedToken(currentSentenceFuriganaTokens, oldToken);
+    if(mapped){
+      lastToken = mapped;
+      fillTokenView(mapped);
+    }else{
+      showSentenceView();
+    }
+  }
+  scheduleReposition();
+}
+
+function normalizeSentenceFurigana(rubi, text){
+  const tokens = (rubi?.tokens || rubi?.result || rubi?.morphs || rubi?.morphemes || [])
+    .map(t=>({
+      surface: t.surface || t.text || "",
+      reading: kataToHira(t.reading || t.read || t.kana || ""),
+      lemma: t.lemma || t.base || t.baseform || t.dict || (t.surface || t.text || "")
+    }))
+    .filter(t=>t.surface);
+
+  let cursor = 0;
+  for(const t of tokens){
+    const pos = text.indexOf(t.surface, cursor);
+    const start = pos >= 0 ? pos : cursor;
+    t.start = start;
+    t.end = start + t.surface.length;
+    cursor = t.end;
+  }
+  return tokens;
+}
+
+async function reanalyzeCurrentSentenceForSplitMode(){
+  if(!currentSentenceText) return;
+  const text = currentSentenceText;
+  if(splitModeInput) splitModeInput.disabled = true;
+  const promise = getFurigana(text, getSplitMode()).then(r=>normalizeSentenceFurigana(r, text));
+  currentSentenceFuriganaPromise = promise;
+  try{
+    const tokens = await promise;
+    if(currentSentenceText !== text) return;
+    baseSentenceTokens = tokens;
+    currentSentenceFuriganaPromise = Promise.resolve(tokens);
+    // split 조절은 기본 Sudachi 분석을 다시 보는 동작이다. AI 결과는 캐시에만 보존한다.
+    applyAnalysisMode("base");
+  }catch(e){
+    console.error(e);
+    alert(`형태소 분할 변경 실패: ${e?.message || e}`);
+    currentSentenceFuriganaPromise = Promise.resolve(currentSentenceFuriganaTokens || []);
+  }finally{
+    if(splitModeInput) splitModeInput.disabled = false;
+  }
+}
+
+splitModeInput?.addEventListener("change", ()=>{
+  const mode = SPLIT_MODES[Number(splitModeInput.value)] || "C";
+  setSplitMode(mode);
+  reanalyzeCurrentSentenceForSplitMode();
+});
+
+// 메인 팝업 실제 렌더
+async function openMainPopover(anchor, text){
+  currentSentenceText = text || "";
+  currentSentenceTranslation = "";
+  currentSentenceFuriganaTokens = [];
+  baseSentenceTranslation = "";
+  baseSentenceTokens = [];
+  aiSentenceResult = null;
+  unitExplainCache.clear();
+  analysisMode = "base";
+  if(btnAi){ btnAi.disabled = true; btnAi.textContent = "✦"; }
+  updateAiButton();
+
+  currentSentenceFuriganaPromise = getFurigana(text, getSplitMode()).then(r=>normalizeSentenceFurigana(r, text));
+  pop.hidden = false;
+  showSentenceView();
+  setGhost(false);
+
+  const aw = anchor.getBoundingClientRect().width;
+  const overlayW = overlay.clientWidth;
+  pop.style.width = Math.min(Math.max(Math.round(aw*1.1), 420), Math.round(overlayW*0.92))+"px";
+
+  renderFallbackTokens(rubyLine, text);
+  transLine.textContent="…";
+  scheduleReposition();
+
+  // 후리가나와 번역은 병렬 요청하되, 서로 기다리지 않고 도착 즉시 각각 화면에 반영한다.
+  const furiTask = currentSentenceFuriganaPromise.then(tokens=>{
+    if(currentSentenceText !== text) return;
+    baseSentenceTokens = tokens;
+    currentSentenceFuriganaTokens = tokens;
+    currentSentenceFuriganaPromise = Promise.resolve(tokens);
+    if(tokens.length) renderFuriganaTokens(rubyLine, tokens);
+    scheduleReposition();
+  }).catch(e=>{
+    console.error(e);
+  });
+
+  const translateTask = translateJaKo(text).then(tr=>{
+    if(currentSentenceText !== text) return;
+    baseSentenceTranslation = tr?.text || tr?.result || tr?.translation || "";
+    currentSentenceTranslation = baseSentenceTranslation;
+    transLine.textContent = baseSentenceTranslation || "(번역 없음)";
+    scheduleReposition();
+  }).catch(e=>{
+    console.error(e);
+    if(currentSentenceText === text && (!transLine.textContent || transLine.textContent==="…")){
+      transLine.textContent="(번역 실패)";
+    }
+  });
+
+  Promise.allSettled([furiTask, translateTask]).then(()=>{
+    if(currentSentenceText !== text) return;
+    if(btnAi) btnAi.disabled = false;
+    updateAiButton();
+    scheduleReposition();
+  });
+}
+
+// ===== 토큰 뷰 채우기 =====
+async function fillTokenView(tok){
+  const surface = tok.surface || "";
+  const surfaceReading = kataToHira(tok.reading || "");
+  const lemma = tok.lemma || surface;
+  const isAi = !!tok.ai;
+
+  const lookupTerm = lemma || surface;
+  const navUrl = `https://ja.dict.naver.com/#/search?range=all&query=${encodeURIComponent(lookupTerm)}`;
+  const headTerm = isAi ? surface : lemma;
+  const headReading = isAi ? surfaceReading : ((lemma===surface) ? surfaceReading : "");
+  const aiHeadHtml = isAi && Number.isFinite(tok.start) && Number.isFinite(tok.end)
+    ? baseRubyRangeHtml(tok.start,tok.end)
+    : "";
+  subHead.innerHTML = `
+    <a id="subLemmaLink" class="surf" lang="ja" href="${navUrl}" target="_blank" rel="noopener noreferrer">${
+      aiHeadHtml || (hasKanji(headTerm) && headReading ? `<ruby lang="ja">${escapeHtml(headTerm)}<rt>${escapeHtml(headReading)}</rt></ruby>` : escapeHtml(headTerm))
+    }</a>
+    <span class="lemma">${!isAi && surface && surface!==lemma ? `(${escapeHtml(surface)})` : ""}</span>
+    <span id="subMeaning" class="meaning"></span>
+  `;
+
+  if(!isAi && hasKanji(lemma) && lemma!==surface){
+    getLemmaReading(lemma).then(rt=>{
+      const link=document.getElementById("subLemmaLink");
+      if(link && rt) link.innerHTML=`<ruby lang="ja">${escapeHtml(lemma)}<rt>${escapeHtml(rt)}</rt></ruby>`;
+      scheduleReposition();
+    });
+  }
+
+  kwrapDiv.innerHTML = "";
+  kExplain.style.display="none";
+  kExplain.innerHTML="";
+
+  const mEl = document.getElementById("subMeaning");
+  if(tok.meaning){
+    if(mEl) mEl.textContent = tok.meaning;
+    if(tok.note){
+      kExplain.style.display="block";
+      kExplain.textContent=tok.note;
+    }
+  }else{
+    try{
+      const r = await translateJaKo(lemma||surface);
+      const txt = r?.text || r?.result || r?.translation || "";
+      if(mEl) mEl.textContent = txt || "";
+    }catch{ /* ignore */ }
+  }
+
+  await DB_READY;
+
+  const wordForKanji = tok.ai ? surface : lemma;
+  const uniqKanji = uniq(Array.from(wordForKanji).filter(ch=>hasKanji(ch)));
+
+  // 박스 min-width: 가장 긴 gloss 길이 기반
+  let maxGlossLen=0;
+  const preview=[];
+  for(const ch of uniqKanji){
+    const anki = ANKI[ch];
+    const db   = KANJI[ch];
+
+    let glossText="";
+    if(anki && anki.mean){
+      glossText = anki.mean;
+    }else if(db){
+      const yomi=(db["음"]||"").toString().trim();
+      const hun =(db["훈"]||"").toString().trim();
+      glossText=[yomi, hun].filter(Boolean).join(" · ");
+    }
+    maxGlossLen = Math.max(maxGlossLen, glossText.replace(/\n/g," ").length);
+    preview.push({ch, anki, db, glossText});
+  }
+
+  const minW = Math.min(240, Math.max(84, maxGlossLen*8));
+
+  for(const item of preview){
+    const {ch, anki, glossText} = item;
+    const box=document.createElement("div");
+    box.className="kbox " + (anki ? "anki" : "learn");
+    box.style.minWidth = minW+"px";
+
+    // 텍스트번역기와 동일한 동작:
+    // - 기본: 한 줄(漢字 • 훈/음)
+    // - anki가 있으면: 박스 자체가 늘어나며(accordion) 내부에 설명을 표시
+    // - anki가 없으면: 네이버 사전으로 이동
+    box.innerHTML = `
+      <div class="kbox-headrow">
+        <div class="kbox-head" lang="ja">${escapeHtml(ch)}</div>
+        <div class="kbox-body">${escapeHtml(glossText)}</div>
+      </div>
+      <div class="kbox-desc" aria-hidden="true"></div>
+    `;
+
+    const descEl = box.querySelector(".kbox-desc");
+
+    box.addEventListener("click",ev=>{
+      ev.stopPropagation();
+
+      if(anki){
+        const isOpening = !box.classList.contains("open");
+
+        // 다른 열린 박스는 닫기 (텍스트번역기처럼 1개만 펼침)
+        kwrapDiv.querySelectorAll(".kbox.open").forEach(other=>{
+          if(other===box) return;
+          other.classList.remove("open");
+          const od = other.querySelector(".kbox-desc");
+          if(od) od.innerHTML = "";
+          other.setAttribute("aria-expanded","false");
+        });
+
+        if(isOpening){
+          box.classList.add("open");
+          box.setAttribute("aria-expanded","true");
+          // 설명 + 번호(#unit) 배지(텍스트번역기와 동일)
+const unitRaw = (anki.unit || "").toString().trim();
+let explainRaw = (anki.explain || "").toString().trim();
+
+// explain 안에 "#unit"이 이미 들어있으면 중복 표시 방지
+if(unitRaw){
+  const esc = unitRaw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  explainRaw = explainRaw.replace(new RegExp("\\s*#"+esc+"\\s*$"), "").trim();
+}
+const explainHtml = nl2br(explainRaw || "(설명 없음)");
+const badgeHtml = unitRaw ? `<span class="kdesc-badge">#${escapeHtml(unitRaw)}</span>` : "";
+descEl.innerHTML = `<div class="kdesc-row"><div class="kdesc-text">${explainHtml}</div>${badgeHtml}</div>`;
+          descEl.setAttribute("aria-hidden","false");
+        }else{
+          box.classList.remove("open");
+          box.setAttribute("aria-expanded","false");
+          descEl.innerHTML = "";
+          descEl.setAttribute("aria-hidden","true");
+        }
+
+        scheduleReposition();
+      }else{
+        openNaverJaLemma(ch);
+      }
+    });
+
+    kwrapDiv.appendChild(box);
+}
+
+  scheduleReposition();
+}
+
+
+// ===== Learning log 저장 =====
+function setSaveButtonState(btn, state){
+  if(!btn) return;
+  btn.classList.remove("saved", "error");
+  if(state === "saving"){
+    btn.dataset.prevText = btn.textContent;
+    btn.textContent = "…";
+    btn.disabled = true;
+  }else if(state === "saved"){
+    btn.textContent = "✓";
+    btn.classList.add("saved");
+    btn.disabled = false;
+    setTimeout(()=>{
+      btn.textContent = btn.dataset.prevText || (btn.id.includes("New") ? "＋" : "💾");
+      btn.classList.remove("saved");
+    }, 900);
+  }else if(state === "error"){
+    btn.textContent = "!";
+    btn.classList.add("error");
+    btn.disabled = false;
+    setTimeout(()=>{
+      btn.textContent = btn.dataset.prevText || (btn.id.includes("New") ? "＋" : "💾");
+      btn.classList.remove("error");
+    }, 1400);
+  }else{
+    btn.textContent = btn.dataset.prevText || btn.textContent;
+    btn.disabled = false;
+  }
+}
+
+function currentTokenPayload(){
+  const tok = lastToken || {};
+  const surface = tok.surface || "";
+  const lemma = tok.lemma || surface;
+  let start = Number.isFinite(tok.start) ? tok.start : null;
+  let end = Number.isFinite(tok.end) ? tok.end : null;
+  if(start == null && surface && currentSentenceText){
+    const pos = currentSentenceText.indexOf(surface);
+    if(pos >= 0){ start = pos; end = pos + surface.length; }
+  }
+  return {
+    target_word: lemma,
+    target_surface: surface,
+    target_word_lemma: lemma,
+    target_word_reading: tok.reading || "",
+    target_start_index: start,
+    target_end_index: end,
+  };
+}
+
+function currentSourceBbox(){
+  const nw = Number(imgEl.naturalWidth || 0);
+  const nh = Number(imgEl.naturalHeight || 0);
+  const selected = selectedIdxs.map(i=>annos[i]).filter(Boolean);
+  if(!nw || !nh || !selected.length) return null;
+  const points = selected.flatMap(a=>Array.isArray(a.polygon) ? a.polygon : []);
+  if(!points.length) return null;
+  const xs = points.map(p=>Number(p?.[0] || 0));
+  const ys = points.map(p=>Number(p?.[1] || 0));
+  const left = Math.max(0, Math.min(...xs));
+  const top = Math.max(0, Math.min(...ys));
+  const right = Math.min(nw, Math.max(...xs));
+  const bottom = Math.min(nh, Math.max(...ys));
+  if(right <= left || bottom <= top) return null;
+  return {
+    x:left / nw,
+    y:top / nh,
+    width:(right - left) / nw,
+    height:(bottom - top) / nh
+  };
+}
+
+async function buildSavePayload(itemType, session){
+  if(!currentSentenceText.trim()) throw new Error("저장할 원문이 없습니다.");
+
+  const shot = await downscaleImageElement(imgEl, { longEdge:1600, quality:0.78 });
+  const furiganaTokens = await currentSentenceFuriganaPromise.catch(()=>currentSentenceFuriganaTokens || []);
+  const bbox = currentSourceBbox();
+  const base = {
+    session_id: session.id,
+    item_type: itemType,
+    source_text: currentSentenceText,
+    // 즉시 번역 결과는 DB 핵심값으로 쓰지 않지만, 디버그/미리보기용으로만 보낼 수 있게 둔다.
+    ui_translation: currentSentenceTranslation || "",
+    source_image_id: currentImageId || "",
+    source_image_url: imgEl.currentSrc || imgEl.src || "",
+    screenshot: shot,
+    source_furigana_json: furiganaTokens?.length ? JSON.stringify(furiganaTokens.map(t=>({
+      surface:t.surface, reading:t.reading||"", lemma:t.lemma||t.surface,
+      meaning:t.meaning||"", note:t.note||"", kind:t.kind||"word",
+      start:Number.isFinite(t.start)?t.start:null, end:Number.isFinite(t.end)?t.end:null
+    }))) : null,
+    source_bbox_json: bbox ? JSON.stringify(bbox) : null,
+    page_url: location.href,
+    created_tz_offset_min: new Date().getTimezoneOffset(),
+  };
+
+  if(itemType === "kanji_box"){
+    Object.assign(base, currentTokenPayload());
+    if(!base.target_word) throw new Error("저장할 단어가 없습니다.");
+  }
+  return base;
+}
+
+async function doSave(itemType, session, btn){
+  setSaveButtonState(btn, "saving");
+  try{
+    const payload = await buildSavePayload(itemType, session);
+    const out = await saveItem(payload);
+    if(out?.session) setLastSession(out.session);
+    setSaveButtonState(btn, "saved");
+  }catch(e){
+    console.error(e);
+    alert(`학습로그 저장 실패: ${e.message || e}`);
+    setSaveButtonState(btn, "error");
+  }
+}
+
+async function saveToRecent(itemType, btn){
+  let session = getLastSession();
+  if(!session?.id){
+    session = await chooseOrCreateSession();
+    if(!session) return;
+  }
+  await doSave(itemType, session, btn);
+}
+
+async function saveToNewOrChosen(itemType, btn){
+  const session = await chooseOrCreateSession();
+  if(!session) return;
+  await doSave(itemType, session, btn);
+}
+
+let sessionSearchTimer = null;
+function renderSessionCandidates(list, resolve){
+  sessionCandidates.innerHTML = "";
+  if(!Array.isArray(list) || !list.length){
+    sessionCandidates.innerHTML = `<div class="session-hint">일치하는 기존 세션이 없습니다.</div>`;
+    return;
+  }
+  for(const s of list){
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "session-candidate";
+    b.innerHTML = `
+      <div class="title">${escapeHtml(s.title || s.session_key || s.raw_url || s.id)}</div>
+      <div class="url">${escapeHtml(s.canonical_url || s.raw_url || "링크 없음")}</div>
+    `;
+    b.addEventListener("click",()=>{
+      setLastSession(s);
+      sessionDlg.close("selected");
+      resolve(s);
+    });
+    sessionCandidates.appendChild(b);
+  }
+}
+
+function chooseOrCreateSession(){
+  return new Promise(resolve=>{
+    sessionUrlInput.value = "";
+    sessionCandidates.innerHTML = "";
+    sessionCandidates.hidden = true;
+    sessionHint.textContent = "세션명 또는 YouTube 링크를 입력하세요. 같은 이름이나 링크가 있으면 기존 세션을 사용합니다.";
+
+    const showExisting = async()=>{
+      sessionExistingBtn.disabled = true;
+      sessionCandidates.hidden = false;
+      sessionCandidates.innerHTML = `<div class="session-hint">기존 세션을 불러오는 중…</div>`;
+      try{
+        const q = sessionUrlInput.value.trim();
+        const out = q ? await searchSessions(q) : await recentSessions();
+        renderSessionCandidates(out?.sessions || [], resolve);
+      }catch(e){
+        sessionCandidates.innerHTML = `<div class="session-hint">세션 목록 오류: ${escapeHtml(e.message||e)}</div>`;
+      }finally{
+        sessionExistingBtn.disabled = false;
+      }
+    };
+
+    const onInput = ()=>{
+      if(sessionCandidates.hidden) return;
+      clearTimeout(sessionSearchTimer);
+      sessionSearchTimer = setTimeout(showExisting, 180);
+    };
+
+    const onPaste = async ev=>{
+      ev.preventDefault();
+      try{
+        const clip = await navigator.clipboard?.readText?.();
+        if(clip) sessionUrlInput.value = clip.trim();
+        sessionUrlInput.focus();
+        onInput();
+      }catch(e){
+        sessionHint.textContent = `붙여넣기 실패: ${e.message || e}`;
+      }
+    };
+
+    const onExisting = ev=>{ ev.preventDefault(); showExisting(); };
+
+    const onUse = async ev=>{
+      ev.preventDefault();
+      const input = sessionUrlInput.value.trim();
+      if(!input){
+        sessionHint.textContent = "세션명 또는 YouTube 링크를 입력하세요.";
+        return;
+      }
+      sessionUseBtn.disabled = true;
+      sessionUseBtn.textContent = "확인 중…";
+      try{
+        const out = await resolveSession(input);
+        const session = out?.session;
+        if(!session) throw new Error("세션 생성/조회 실패");
+        setLastSession(session);
+        cleanup();
+        sessionDlg.close("ok");
+        resolve(session);
+      }catch(e){
+        sessionHint.textContent = `세션 처리 실패: ${e.message || e}`;
+      }finally{
+        sessionUseBtn.disabled = false;
+        sessionUseBtn.textContent = "저장";
+      }
+    };
+
+    const onClose = ()=>{
+      cleanup();
+      if(sessionDlg.returnValue !== "ok" && sessionDlg.returnValue !== "selected") resolve(null);
+    };
+    const cleanup = ()=>{
+      clearTimeout(sessionSearchTimer);
+      sessionUrlInput.removeEventListener("input", onInput);
+      sessionPasteBtn.removeEventListener("click", onPaste);
+      sessionExistingBtn.removeEventListener("click", onExisting);
+      sessionUseBtn.removeEventListener("click", onUse);
+      sessionDlg.removeEventListener("close", onClose);
+    };
+
+    sessionUrlInput.addEventListener("input", onInput);
+    sessionPasteBtn.addEventListener("click", onPaste);
+    sessionExistingBtn.addEventListener("click", onExisting);
+    sessionUseBtn.addEventListener("click", onUse);
+    sessionDlg.addEventListener("close", onClose, {once:true});
+    sessionDlg.showModal();
+    sessionUrlInput.focus();
+  });
+}
+
+btnSaveSentence?.addEventListener("click", ev=>{
+  ev.stopPropagation();
+  saveToRecent("sentence_box", btnSaveSentence);
+});
+btnNewSaveSentence?.addEventListener("click", ev=>{
+  ev.stopPropagation();
+  saveToNewOrChosen("sentence_box", btnNewSaveSentence);
+});
+btnSaveToken?.addEventListener("click", ev=>{
+  ev.stopPropagation();
+  saveToRecent("kanji_box", btnSaveToken);
+});
+btnNewSaveToken?.addEventListener("click", ev=>{
+  ev.stopPropagation();
+  saveToNewOrChosen("kanji_box", btnNewSaveToken);
+});
+
+// ===== 레이아웃 이벤트 =====
+function onResize(){
+  renderOverlay(true);
+  scheduleReposition();
+}
+
+function onScroll(){
+  // 스크롤에서는 overlay 재렌더 금지(선택 DOM이 깨져서 팝업이 구석으로 튐)
+  scheduleReposition();
+}
+
+window.addEventListener("resize", onResize, {passive:true});
+globalThis.visualViewport?.addEventListener("resize", onResize, {passive:true});
+window.addEventListener("scroll", onScroll, {passive:true});
+
+// 팝업 크기 변화(번역 지연/토큰뷰 토글)에 대응
+if(window.ResizeObserver){
+  new ResizeObserver(()=>scheduleReposition()).observe(pop);
+}
+
+// 바깥 탭: 토큰뷰/문장뷰는 그대로, 선택 모드에서만 토글 버튼으로 복귀
+stage.addEventListener("click",e=>{
+  // 메인 팝업 닫기는 우상단 ✕로만
+},{capture:false});
