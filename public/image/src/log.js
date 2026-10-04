@@ -5,7 +5,8 @@ const DEFAULT_LOG_WORKER_BASE = "https://jp-translator-api.rlaalsrbr.workers.dev
 const LS_BASE  = "jpTranslatorApiBase";
 const LS_APP_TOKEN = "jpTranslatorAppToken";       // 관리 페이지/수동용 fallback
 const LS_LOG_TOKEN = "jpTranslatorLogToken";       // 단축어가 발급받아 URL hash로 넘기는 짧은 토큰
-const LS_LAST_SESSION = "jpTranslatorLastSession";
+const LS_LAST_SESSION = "jpTranslatorLastSessionImage";
+const LS_LAST_SESSION_LEGACY = "jpTranslatorLastSession";
 
 export function getLogWorkerBase(){
   return (localStorage.getItem(LS_BASE) || DEFAULT_LOG_WORKER_BASE).replace(/\/$/, "");
@@ -46,8 +47,15 @@ export function setAppToken(token){
 }
 
 export function getLastSession(){
-  try{ return JSON.parse(localStorage.getItem(LS_LAST_SESSION) || "null"); }
-  catch{ return null; }
+  try{
+    const own = localStorage.getItem(LS_LAST_SESSION);
+    if(own) return JSON.parse(own);
+    const legacy = localStorage.getItem(LS_LAST_SESSION_LEGACY);
+    if(!legacy) return null;
+    const session = JSON.parse(legacy);
+    if(session?.id) localStorage.setItem(LS_LAST_SESSION, JSON.stringify(session));
+    return session;
+  }catch{ return null; }
 }
 
 export function setLastSession(session){

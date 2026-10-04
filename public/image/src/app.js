@@ -16,7 +16,7 @@ import {
   resolveSession,
   saveItem,
   downscaleImageElement,
-} from "./log.js?v=20260719-v7";
+} from "./log.js?v=20261004-v8";
 
 const stage     = document.getElementById("stage");
 const imgEl     = document.getElementById("img");
@@ -540,9 +540,11 @@ btnAi?.addEventListener("click", async (e)=>{
         start:t.start, end:t.end
       }))
     });
+    const aiRubyTokens = normalizeSentenceFurigana({tokens:out?.ruby_tokens || []}, currentSentenceText);
     aiSentenceResult = {
       translation: String(out?.translation || ""),
-      units: normalizeAiUnits(out?.units || [], currentSentenceText)
+      units: normalizeAiUnits(out?.units || [], currentSentenceText),
+      rubyTokens: aiRubyTokens.length ? aiRubyTokens : aTokens
     };
     if(!aiSentenceResult.units.length) throw new Error("AI가 학습 단위를 반환하지 않았습니다.");
     unitExplainCache.clear();
@@ -635,13 +637,15 @@ function renderFallbackTokens(container, text){
   });
 }
 
-// AI 학습단위(클릭 범위)와 후리가나 표시 단위를 분리한다.
-// AI가 긴 phrase/grammar unit을 만들더라도 ruby는 기존 Sudachi 토큰 단위로 표시한다.
+// AI 모드에서는 확정된 학습 unit 전체의 검수된 reading으로 ruby를 표시한다.
 function baseRubyRangeHtml(start,end){
   const text=String(currentSentenceText||"");
   if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start) return escapeHtml(text.slice(start||0,end||0));
   let cursor=start, out="";
-  for(const b of (baseSentenceTokens||[])){
+  const rubyTokens=(analysisMode==="ai" && aiSentenceResult?.rubyTokens?.length)
+    ? aiSentenceResult.rubyTokens
+    : (baseSentenceTokens||[]);
+  for(const b of rubyTokens){
     if(!Number.isFinite(b.start)||!Number.isFinite(b.end)||b.end<=start||b.start>=end) continue;
     const os=Math.max(start,b.start,cursor), oe=Math.min(end,b.end);
     if(os>cursor) out+=escapeHtml(text.slice(cursor,os));
