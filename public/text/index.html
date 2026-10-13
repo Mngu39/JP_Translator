@@ -389,8 +389,8 @@ async function callDeepL(text,src="JA",tgt="KO"){
     .then(r=>{if(!r.ok) throw new Error("DeepL "+r.status); return r.json();});
   return withTimeout(fetcher,45000,"DeepL");
 }
-async function callRestructure(text,{deeplTranslation="",morphs=[]}={}){
-  const body={text,deepl_translation:deeplTranslation,morphs};
+async function callRestructure(text){
+  const body={text};
   const fetcher=async signal=>fetch(RESTRUCTURE_URL,{method:"POST",headers: await authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(body),signal})
     .then(async r=>{
       const raw=await r.text().catch(()=>"");
@@ -400,8 +400,8 @@ async function callRestructure(text,{deeplTranslation="",morphs=[]}={}){
     });
   return withTimeout(fetcher,130000,"AI 재구성");
 }
-async function callExplainUnit({text="",translation="",surface="",reading="",lemma="",start=null,end=null}={}){
-  const body={text,translation,surface,reading,lemma,start,end};
+async function callExplainUnit({text="",surface="",start=null,end=null}={}){
+  const body={text,surface,start,end};
   const fetcher=async signal=>fetch(EXPLAIN_UNIT_URL,{method:"POST",headers: await authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(body),signal})
     .then(async r=>{
       const raw=await r.text().catch(()=>"");
@@ -595,6 +595,19 @@ const APP=(function(){
   });
 })();
 if(!(APP.unitExplainCache instanceof Map)) APP.unitExplainCache=new Map();
+// Word AI is an optional view overlay. Never mutate Sudachi/base or sentence-AI source tokens.
+if(!(APP.wordAiVisible instanceof Set)) APP.wordAiVisible=new Set();
+if(!(APP.wordDeepLCache instanceof Map)) APP.wordDeepLCache=new Map();
+APP.sessionEpoch=(APP.sessionEpoch||0)+1;
+
+function wordKey(tok,mode=APP.analysisMode){return `${mode}:${unitExplainKey(tok)}`;}
+function wordAiIsVisible(tok){return !!tok && APP.wordAiVisible.has(wordKey(tok)) && APP.unitExplainCache.has(wordKey(tok));}
+function displayedWordToken(tok){
+  if(!tok || !wordAiIsVisible(tok)) return tok;
+  const ai=APP.unitExplainCache.get(wordKey(tok));
+  return {...tok, reading:ai.reading||tok.reading, meaning:ai.meaning, note:ai.note, aiReadingCorrected:!!ai.reading};
+}
+
 
 function normalizeTokens(tokens,text,{ai=false}={}){
   let cursor=0;
@@ -623,7 +636,8 @@ function baseRubyRangeHtml(start,end){
   const rubyTokens=(APP.analysisMode==="ai" && APP.aiResult?.rubyTokens?.length)
     ? APP.aiResult.rubyTokens
     : (APP.baseTokens||[]);
-  for(const b of rubyTokens){
+  for(const raw of rubyTokens){
+    const b=displayedWordToken(raw);
     if(!Number.isFinite(b.start)||!Number.isFinite(b.end)||b.end<=start||b.start>=end) continue;
     const os=Math.max(start,b.start,cursor), oe=Math.min(end,b.end);
     if(os>cursor) out+=escapeHtml(text.slice(cursor,os));
@@ -639,8 +653,9 @@ function baseRubyRangeHtml(start,end){
   if(cursor<end) out+=escapeHtml(text.slice(cursor,end));
   return out;
 }
-function tokenPieceHtml(t,idx,piece,pieceStart){
+function tokenPieceHtml(rawToken,idx,piece,pieceStart){
   if(!piece) return "";
+  const t=displayedWordToken(rawToken);
   const rt=t.reading?kata2hira(t.reading):"";
   const inner=t.ai
     ? baseRubyRangeHtml(pieceStart,pieceStart+piece.length)
@@ -718,10 +733,10 @@ function updateAiButtons(){
   }
   const wordBtn=$("#popAi");
   if(wordBtn){
-    const explained=!!(APP.activeToken && (APP.activeToken.meaning || APP.unitExplainCache.has(unitExplainKey(APP.activeToken))));
-    wordBtn.classList.toggle("active",explained);
+    const active=wordAiIsVisible(APP.activeToken);
+    wordBtn.classList.toggle("active",active);
     wordBtn.classList.toggle("loading",APP.aiBusy);
-    wordBtn.title="선택 표현 AI 설명";
+    wordBtn.title=active?(APP.analysisMode==="ai"?"문장 AI 분석 결과로 돌아가기":"기본 Sudachi/DeepL 결과로 돌아가기"):"선택 표현 AI 설명";
     wordBtn.setAttribute("aria-label",wordBtn.title);
   }
 }
@@ -874,44 +889,50 @@ async function fillKanjiBoxes(lemma){
 
 /* ===== 팝업 오픈/닫기 ===== */
 function openPopBelowToken(tokEl,payload){
-  const surface=payload.surface||"", lemma=payload.lemma||surface;
-  const displayTerm=payload.ai ? surface : lemma;
+  const shown=displayedWordToken(payload);
+  const surface=shown.surface||"", lemma=shown.lemma||surface;
+  const aiWord=wordAiIsVisible(payload);
   popAnchorEl=tokEl;
-  APP.activeToken=payload;
-  const cachedExplain=APP.unitExplainCache.get(unitExplainKey(payload));
-  if(cachedExplain){ payload.meaning=cachedExplain.meaning||""; payload.note=cachedExplain.note||""; }
+  APP.activeToken=payload; // Immutable source token; never replace with the overlay.
 
+  const displayTerm=(shown.ai||aiWord) ? surface : lemma;
   popLink.innerHTML=escapeHtml(displayTerm);
   popLink.href=buildNaverSearchUrl(lemma||surface);
-  popSub.textContent=(!payload.ai&&surface&&surface!==lemma)?"("+surface+")":"";
+  popSub.textContent=(!shown.ai&&!aiWord&&surface&&surface!==lemma)?"("+surface+")":"";
   popNote.style.display="none"; popNote.textContent="";
 
-  if(payload.ai && Number.isFinite(payload.start) && Number.isFinite(payload.end)){
-    popLink.innerHTML=baseRubyRangeHtml(payload.start,payload.end) || escapeHtml(displayTerm);
-  }else if(payload.ai && payload.reading && hasKanji(displayTerm)){
-    popLink.innerHTML=`<ruby class="ja" lang="ja"><rb>${escapeHtml(displayTerm)}</rb><rt>${escapeHtml(kata2hira(payload.reading))}</rt></ruby>`;
+  if(shown.ai && Number.isFinite(shown.start) && Number.isFinite(shown.end)){
+    popLink.innerHTML=baseRubyRangeHtml(shown.start,shown.end) || escapeHtml(displayTerm);
+  }else if((shown.ai||aiWord) && shown.reading && hasKanji(displayTerm)){
+    popLink.innerHTML=`<ruby class="ja" lang="ja"><rb>${escapeHtml(displayTerm)}</rb><rt>${escapeHtml(kata2hira(shown.reading))}</rt></ruby>`;
   }else if(hasKanji(lemma)){
     getLemmaReading(lemma).then(rt=>{
-      if(APP.activeToken!==payload) return;
+      if(APP.activeToken!==payload || wordAiIsVisible(payload)) return;
       popLink.innerHTML=rt?`<ruby class="ja" lang="ja"><rb>${escapeHtml(lemma)}</rb><rt>${escapeHtml(rt)}</rt></ruby>`:escapeHtml(lemma);
       schedulePopReposition();
     });
   }
 
-  if(payload.meaning){
-    popDeepl.textContent=payload.meaning;
-    if(payload.note){ popNote.textContent=payload.note; popNote.style.display="block"; }
+  if(aiWord || shown.meaning){
+    popDeepl.textContent=shown.meaning||"(결과 없음)";
+    if(shown.note){ popNote.textContent=shown.note; popNote.style.display="block"; }
   }else{
-    popDeepl.textContent="불러오는 중…";
-    callDeepL(preprocessTextForDeepL(normalizePunctEmojis(lemma)),"JA","KO").then(res=>{
-      if(APP.activeToken!==payload) return;
-      const t=res.translation||res.result||res.data||"";
-      popDeepl.textContent=t||"(결과 없음)";
-      schedulePopReposition();
-    }).catch(e=>{ if(APP.activeToken===payload) popDeepl.textContent="에러: "+(e&&e.message?e.message:String(e)); });
+    const lookup=preprocessTextForDeepL(normalizePunctEmojis(lemma));
+    if(APP.wordDeepLCache.has(lookup)){
+      popDeepl.textContent=APP.wordDeepLCache.get(lookup)||"(결과 없음)";
+    }else{
+      popDeepl.textContent="불러오는 중…";
+      callDeepL(lookup,"JA","KO").then(res=>{
+        const t=res.translation||res.result||res.data||"";
+        APP.wordDeepLCache.set(lookup,t);
+        if(APP.activeToken!==payload || wordAiIsVisible(payload)) return;
+        popDeepl.textContent=t||"(결과 없음)";
+        schedulePopReposition();
+      }).catch(e=>{ if(APP.activeToken===payload && !wordAiIsVisible(payload)) popDeepl.textContent="에러: "+(e&&e.message?e.message:String(e)); });
+    }
   }
 
-  fillKanjiBoxes(payload.ai?surface:lemma).then(()=>schedulePopReposition()).catch(()=>{});
+  fillKanjiBoxes(shown.ai?surface:lemma).then(()=>schedulePopReposition()).catch(()=>{});
   popAi.disabled=!APP.currentText;
   updateAiButtons();
   positionPopupToToken(tokEl);
@@ -944,21 +965,18 @@ async function toggleAiAnalysis(){
   $("#btnAiText").disabled=true;
   updateAiButtons();
   try{
-    // AI 분절은 화면 A/B/C와 별개로 가장 작은 Sudachi A 단위를 경계 후보로 사용한다.
-    const aFuri=await callFurigana(APP.currentText,"A");
-    const aTokens=normalizeTokens(aFuri.tokens||[],APP.currentText);
-    const out=await callRestructure(APP.currentText,{
-      deeplTranslation:APP.baseTranslation,
-      morphs:aTokens.map(t=>({surface:t.surface,reading:t.reading||"",lemma:t.lemma||t.surface,start:t.start,end:t.end}))
-    });
+    // 1차 AI 재구성은 원문만 사용한다. Sudachi/DeepL은 분절 판단에 전달하지 않는다.
+    const out=await callRestructure(APP.currentText);
     const units=normalizeAiUnits(out?.units||[],APP.currentText);
     if(!units.length) throw new Error("AI가 학습 단위를 반환하지 않았습니다.");
     const rubyTokens=normalizeTokens(out?.ruby_tokens||[],APP.currentText);
-    APP.unitExplainCache.clear();
+    if(rubyTokens.length!==units.length || rubyTokens.some((t,i)=>t.surface!==units[i].surface || t.start!==units[i].start || t.end!==units[i].end))
+      throw new Error("AI 루비와 학습 단위가 일치하지 않습니다. Sudachi 결과로 대체하지 않습니다.");
+    APP.unitExplainCache.clear(); APP.wordAiVisible.clear();
     APP.aiResult={
       translation:String(out?.translation||""),
       units,
-      rubyTokens:rubyTokens.length?rubyTokens:aTokens
+      rubyTokens
     };
     applyAnalysisMode("ai");
   }catch(e){
@@ -973,27 +991,37 @@ async function toggleAiAnalysis(){
 async function explainActiveToken(){
   const tok=APP.activeToken;
   if(APP.aiBusy||!APP.currentText||!tok) return;
-  const key=unitExplainKey(tok);
-  const cached=APP.unitExplainCache.get(key);
-  if(cached){
-    tok.meaning=cached.meaning||""; tok.note=cached.note||"";
-    if(popAnchorEl) openPopBelowToken(popAnchorEl,tok);
-    return;
+  const key=wordKey(tok), mode=APP.analysisMode;
+  const refresh=()=>{
+    renderText();
+    const mapped=APP.currentTokens.find(t=>unitExplainKey(t)===unitExplainKey(tok));
+    const idx=APP.currentTokens.indexOf(mapped);
+    const el=idx>=0?$("#rubyOut").querySelector(`.tok[data-i="${idx}"]`):null;
+    if(el && APP.activeToken && unitExplainKey(APP.activeToken)===unitExplainKey(tok) && APP.analysisMode===mode)
+      openPopBelowToken(el,mapped);
+    else updateAiButtons();
+  };
+  if(APP.wordAiVisible.has(key)){
+    APP.wordAiVisible.delete(key); refresh(); return;
   }
-  APP.aiBusy=true;
-  popAi.disabled=true;
-  updateAiButtons();
+  if(APP.unitExplainCache.has(key)){
+    APP.wordAiVisible.add(key); refresh(); return;
+  }
+  const requestSource=APP.currentText, epoch=APP.sessionEpoch;
+  APP.aiBusy=true; popAi.disabled=true; updateAiButtons();
   try{
     const out=await callExplainUnit({
-      text:APP.currentText,
-      translation:APP.currentTranslation||APP.baseTranslation,
-      surface:tok.surface||"",reading:tok.reading||"",lemma:tok.lemma||tok.surface||"",
-      start:Number.isFinite(tok.start)?tok.start:null,end:Number.isFinite(tok.end)?tok.end:null
+      text:requestSource, surface:tok.surface||"",
+      start:Number.isFinite(tok.start)?tok.start:null,
+      end:Number.isFinite(tok.end)?tok.end:null
     });
-    const result={meaning:String(out?.meaning||""),note:String(out?.note||"")};
+    if(APP.currentText!==requestSource || APP.sessionEpoch!==epoch || APP.analysisMode!==mode) return;
+    const result={reading:kata2hira(String(out?.reading||"")),meaning:String(out?.meaning||""),note:String(out?.note||"")};
     APP.unitExplainCache.set(key,result);
-    tok.meaning=result.meaning; tok.note=result.note;
-    if(popAnchorEl) openPopBelowToken(popAnchorEl,tok);
+    if(APP.activeToken && unitExplainKey(APP.activeToken)===unitExplainKey(tok)){
+      APP.wordAiVisible.add(key);
+      refresh();
+    }
   }catch(e){
     console.error(e); alert(`AI 설명 실패: ${e?.message||e}`);
   }finally{
@@ -1002,7 +1030,6 @@ async function explainActiveToken(){
     updateAiButtons();
   }
 }
-
 async function reanalyzeForSplitMode(){
   if(!APP.currentText) return;
   const slider=$("#splitModeText");
@@ -1011,6 +1038,7 @@ async function reanalyzeForSplitMode(){
   try{
     const res=await callFurigana(APP.currentText,getSplitMode());
     APP.baseTokens=normalizeTokens(res.tokens||[],APP.currentText);
+    APP.unitExplainCache.clear(); APP.wordAiVisible.clear();
     applyAnalysisMode("base");
   }catch(e){
     APP.baseTokens=oldTokens;
@@ -1024,7 +1052,8 @@ async function runBoth(){
   if(!text){ const box=$("#inputBox"); if(!box.open) box.open=true; $("#input").focus(); return; }
   closePop();
   APP.currentText=text; APP.baseTokens=[]; APP.currentTokens=[]; APP.baseTranslation=""; APP.currentTranslation="";
-  APP.aiResult=null; APP.analysisMode="base"; APP.aiBusy=false; APP.unitExplainCache.clear();
+  APP.aiResult=null; APP.analysisMode="base"; APP.aiBusy=false;
+  APP.unitExplainCache.clear(); APP.wordAiVisible.clear(); APP.wordDeepLCache.clear(); APP.sessionEpoch++;
   $("#btnAiText").disabled=true; popAi.disabled=true; updateAiButtons();
   $("#rubyOut").innerHTML="<em style='color:#9fb0c2'>생성 중…</em>";
   $("#transOut").innerHTML="<em style='color:#9fb0c2'>번역 중…</em>";
@@ -1087,14 +1116,15 @@ function contextForToken(tok){
   const sourceText=text.slice(lineStart,lineEnd);
   const transLines=String(APP.currentTranslation||"").split("\n");
   const uiTranslation=transLines[firstLine]??APP.currentTranslation??"";
-  const lineTokens=APP.currentTokens.filter(t=>t.end>lineStart&&t.start<lineEnd).map(t=>({
+  const lineTokens=APP.currentTokens.filter(t=>t.end>lineStart&&t.start<lineEnd).map(raw=>{
+    const t=displayedWordToken(raw); return ({
     surface:t.surface,reading:t.reading||"",lemma:t.lemma||t.surface,meaning:t.meaning||"",note:t.note||"",kind:t.kind||"word",
     start:Math.max(0,t.start-lineStart),end:Math.min(lineEnd-lineStart,t.end-lineStart)
-  }));
+  }); });
   return {sourceText,uiTranslation,lineStart,lineTokens,targetStart:start-lineStart,targetEnd:end-lineStart};
 }
 function buildTextSavePayload(){
-  const tok=APP.activeToken; if(!tok) throw new Error("저장할 단어가 없습니다.");
+  const tok=displayedWordToken(APP.activeToken); if(!tok) throw new Error("저장할 단어가 없습니다.");
   const ctx=contextForToken(tok); const lemma=tok.lemma||tok.surface||"";
   return {
     item_type:"kanji_box",source_text:ctx.sourceText,ui_translation:ctx.uiTranslation,

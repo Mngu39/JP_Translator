@@ -72,12 +72,12 @@ export async function translateJaKo(text){
 }
 
 
-// AI 문장 재구성: 전체 번역 + 학습 단위 경계만 보정
-export async function restructureJa(text,{deeplTranslation="",morphs=[]}={}){
+// AI 문장 재구성: 원문만 전달. Worker는 Sudachi 없이 독립 청킹·독음·번역을 수행한다.
+export async function restructureJa(text){
   const r=await fetch(`${getWorkerBase()}/run/restructure`,{
     method:"POST",
     headers:authHeaders({"content-type":"application/json"}),
-    body:JSON.stringify({text,deepl_translation:deeplTranslation,morphs})
+    body:JSON.stringify({text})
   });
   const raw=await r.text().catch(()=>"");
   let j={}; try{j=raw?JSON.parse(raw):{};}catch{}
@@ -85,12 +85,12 @@ export async function restructureJa(text,{deeplTranslation="",morphs=[]}={}){
   return j;
 }
 
-// 선택한 단어/AI 학습단위 하나만 원문 문맥을 참고해 설명
-export async function explainUnitJa({text="",translation="",surface="",reading="",lemma="",start=null,end=null}={}){
+// 선택한 단어/AI 학습단위의 문맥별 독음·의미·설명을 독립 재구성
+export async function explainUnitJa({text="",surface="",start=null,end=null}={}){
   const r=await fetch(`${getWorkerBase()}/run/explain-unit`,{
     method:"POST",
     headers:authHeaders({"content-type":"application/json"}),
-    body:JSON.stringify({text,translation,surface,reading,lemma,start,end})
+    body:JSON.stringify({text,surface,start,end})
   });
   const raw=await r.text().catch(()=>"");
   let j={}; try{j=raw?JSON.parse(raw):{};}catch{}
