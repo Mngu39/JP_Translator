@@ -647,8 +647,8 @@ function baseRubyRangeHtml(start,end){
   const rubyTokens=(analysisMode==="ai" && aiSentenceResult?.rubyTokens?.length)
     ? aiSentenceResult.rubyTokens
     : (baseSentenceTokens||[]);
-  for(const raw of rubyTokens){
-    const b=displayedWordToken(raw);
+  for(const token of rubyTokens){
+    const b=displayedWordToken(token);
     if(!Number.isFinite(b.start)||!Number.isFinite(b.end)||b.end<=start||b.start>=end) continue;
     const os=Math.max(start,b.start,cursor), oe=Math.min(end,b.end);
     if(os>cursor) out+=escapeHtml(text.slice(cursor,os));
