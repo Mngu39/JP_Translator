@@ -10,6 +10,9 @@ import { loadUsageData, buildKanjiUsage, enrichSourceTokens } from "./kanji_usag
 
 const workerBase=document.getElementById("workerBase");
 const saveBase=document.getElementById("saveBase");
+const workerUrlDlg=document.getElementById("workerUrlDlg");
+const openWorkerUrl=document.getElementById("openWorkerUrl");
+const workerUrlCancel=document.getElementById("workerUrlCancel");
 const setToken=document.getElementById("setToken");
 const refresh=document.getElementById("refresh");
 const mainView=document.getElementById("mainView");
@@ -430,8 +433,8 @@ async function loadOverview(){
       <a class="session-title" href="?session=${encodeURIComponent(s.id)}">${esc(s.title||s.session_key||s.id)}</a>
       ${sourceLinkHtml(s)}
       <div class="session-meta"><span>문장 ${Number(s.sentence_count||0)}개</span><span>단어 ${Number(s.word_count||0)}개</span><span>마지막 저장 ${esc(fmtDate(s.last_used_at))}</span></div>
-      <div class="actions">
-        <button class="btn" data-session-act="export" data-apkg>이 세션 APKG 내보내기</button>
+      <div class="actions session-actions">
+        <button class="btn" data-session-act="export" data-apkg title="이 세션 APKG 내보내기"><span class="export-label-full">이 세션 APKG 내보내기</span><span class="export-label-short">이 세션 APKG</span></button>
         <button class="btn" data-session-act="edit">세션명 변경</button>
         <button class="btn danger" data-session-act="delete">세션 삭제</button>
       </div>
@@ -458,8 +461,8 @@ async function loadDetail(sessionId){
       <h2>${esc(s.title||s.session_key||s.id)}</h2>
       ${sourceLinkHtml(s,"YouTube에서 열기")}
       <div class="session-meta"><span>문장 ${Number(s.sentence_count||0)}개</span><span>단어 ${Number(s.word_count||0)}개</span><span>마지막 저장 ${esc(fmtDate(s.last_used_at))}</span></div>
-      <div class="actions">
-        <button class="btn" id="exportSession" data-apkg>이 세션 APKG 내보내기</button>
+      <div class="actions session-actions">
+        <button class="btn" id="exportSession" data-apkg title="이 세션 APKG 내보내기"><span class="export-label-full">이 세션 APKG 내보내기</span><span class="export-label-short">이 세션 APKG</span></button>
         <button class="btn" id="editSession">세션명 변경</button>
         <button class="btn danger" id="deleteSession">세션 삭제</button>
       </div>
@@ -1118,7 +1121,20 @@ bulkMove.addEventListener("click",()=>moveItems([...selectedIds]));
 bulkDelete.addEventListener("click",()=>deleteItems([...selectedIds]));
 bulkCancel.addEventListener("click",()=>setSelectionMode(!selectionMode));
 
-saveBase.addEventListener("click",()=>{setLogWorkerBase(workerBase.value.trim());loadCurrent();});
+openWorkerUrl.addEventListener("click",()=>{
+  workerBase.value=getLogWorkerBase();
+  workerUrlDlg.showModal();
+  workerBase.focus();
+});
+workerUrlCancel.addEventListener("click",()=>workerUrlDlg.close());
+saveBase.addEventListener("click",()=>{
+  setLogWorkerBase(workerBase.value.trim());
+  workerUrlDlg.close();
+  loadCurrent();
+});
+workerBase.addEventListener("keydown",e=>{
+  if(e.key==="Enter"){e.preventDefault();saveBase.click();}
+});
 setToken.addEventListener("click",()=>{
   const token=prompt("APP_TOKEN 입력",getAppToken()||"");
   if(token) setAppToken(token.trim());
