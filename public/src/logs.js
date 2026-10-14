@@ -468,7 +468,6 @@ async function loadDetail(sessionId){
       <button class="filter active" data-filter="all">전체 ${currentItems.length}</button>
       <button class="filter" data-filter="sentence">문장 ${Number(s.sentence_count||0)}</button>
       <button class="filter" data-filter="word">단어 ${Number(s.word_count||0)}</button>
-      <button class="btn selection-toggle" id="selectionToggle" type="button">선택</button>
     </div>
     <div class="learning-search"><input id="detailSearch" type="search" autocomplete="off" placeholder="이 세션의 단어·독음·뜻 검색" aria-label="현재 세션 검색" /><span id="detailSearchCount" class="search-count" aria-live="polite"></span></div>
     <section id="itemList" class="item-list">${currentItems.length?currentItems.map(itemSummary).join(""):"<div class=empty>저장된 카드가 없습니다.</div>"}</section>`;
@@ -476,8 +475,8 @@ async function loadDetail(sessionId){
   document.getElementById("exportSession")?.addEventListener("click",()=>exportApkg(s.id,s.title||"Session"));
   document.getElementById("editSession")?.addEventListener("click",()=>editSessionFlow(s));
   document.getElementById("deleteSession")?.addEventListener("click",()=>removeSession(s.id,true));
-  document.getElementById("selectionToggle")?.addEventListener("click",()=>setSelectionMode(!selectionMode));
   document.getElementById("detailSearch")?.addEventListener("input",applyDetailFilters);
+  updateBulkBar();
   const focusItem=new URL(location.href).searchParams.get("item");
   if(focusItem){
     const row=[...mainView.querySelectorAll(".item-row")].find(el=>el.dataset.itemId===focusItem);
@@ -968,8 +967,6 @@ function setSelectionMode(on){
   selectionMode=Boolean(on);
   if(!selectionMode) selectedIds.clear();
   document.getElementById("itemList")?.classList.toggle("selection-mode",selectionMode);
-  const btn=document.getElementById("selectionToggle");
-  if(btn) btn.textContent=selectionMode?"선택 종료":"선택";
   document.querySelectorAll(".item-detail").forEach(d=>{if(selectionMode)d.hidden=true;});
   document.querySelectorAll(".item-row").forEach(r=>r.classList.toggle("expanded",false));
   updateSelectionUi();
@@ -990,7 +987,13 @@ function updateSelectionUi(){
 }
 
 function updateBulkBar(){
-  bulkBar.hidden=!selectionMode;
+  bulkBar.hidden=!currentSession;
+  bulkCount.hidden=!selectionMode;
+  bulkSelectAll.hidden=!selectionMode;
+  bulkMove.hidden=!selectionMode;
+  bulkDelete.hidden=!selectionMode;
+  bulkCancel.textContent=selectionMode?"취소":"선택";
+  bulkCancel.setAttribute("aria-label",selectionMode?"선택 취소":"선택 모드");
   bulkCount.textContent=`${selectedIds.size}개 선택`;
   bulkMove.disabled=selectedIds.size===0;
   bulkDelete.disabled=selectedIds.size===0;
@@ -1113,7 +1116,7 @@ bulkSelectAll.addEventListener("click",()=>{
 });
 bulkMove.addEventListener("click",()=>moveItems([...selectedIds]));
 bulkDelete.addEventListener("click",()=>deleteItems([...selectedIds]));
-bulkCancel.addEventListener("click",()=>setSelectionMode(false));
+bulkCancel.addEventListener("click",()=>setSelectionMode(!selectionMode));
 
 saveBase.addEventListener("click",()=>{setLogWorkerBase(workerBase.value.trim());loadCurrent();});
 setToken.addEventListener("click",()=>{
