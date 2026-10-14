@@ -31,6 +31,7 @@ const viewToken    = document.getElementById("viewToken");
 const btnBack   = document.getElementById("btnBack");
 const btnFwd    = document.getElementById("btnFwd");
 const btnAi     = document.getElementById("btnAi");
+const btnAiRetry= document.getElementById("btnAiRetry");
 const btnGhost  = document.getElementById("btnGhost");
 const btnEdit   = document.getElementById("btnEdit");
 const btnClose  = document.getElementById("btnClose");
@@ -564,37 +565,13 @@ async function handleAiClick(e,force=false){
   }
  }
 
-// A deliberate long press requests a fresh AI result. Its following synthetic
-// click must not also toggle the cached result (mobile Safari and desktop).
-function bindAiLongPress(button,onHold){
-  if(!button) return;
-  let timer=null,held=false,suppress=false,origin=null;
-  const clear=()=>{if(timer!==null){clearTimeout(timer);timer=null;}};
-  button.style.touchAction="manipulation";
-  button.addEventListener("pointerdown",e=>{
-    if(e.button!==0 || button.disabled) return;
-    clear(); held=false; suppress=false; origin={x:e.clientX,y:e.clientY};
-    timer=setTimeout(()=>{
-      timer=null;held=true;suppress=true;
-      onHold();
-    },650);
-  });
-  button.addEventListener("pointermove",e=>{
-    if(origin&&Math.hypot(e.clientX-origin.x,e.clientY-origin.y)>12)clear();
-  });
-  button.addEventListener("pointerup",()=>{clear();origin=null;});
-  button.addEventListener("pointercancel",()=>{clear();origin=null;});
-  button.addEventListener("contextmenu",e=>{e.preventDefault();});
-  button.addEventListener("click",e=>{
-    if(suppress||held){e.preventDefault();e.stopImmediatePropagation();suppress=false;held=false;}
-  },true);
-}
-
-btnAi?.addEventListener("click", e=>{void handleAiClick(e);});
-bindAiLongPress(btnAi,()=>{
-  if(pop.hidden||aiBusy||!currentSentenceText) return;
+// ✦는 기본/AI 전환, ↻는 사용자 확인을 받은 재생성만 담당한다.
+btnAi?.addEventListener("click",e=>{void handleAiClick(e);});
+btnAiRetry?.addEventListener("click",e=>{
+  e.stopPropagation();
+  if(pop.hidden||aiBusy||!currentSentenceText||btnAiRetry.disabled) return;
   const message=inTokenView ? "선택 표현의 AI 설명을 다시 요청할까요?" : "문장 AI 재구성을 다시 요청할까요? 기존 결과는 새 요청이 성공하면 교체됩니다.";
-  if(confirm(message)) void handleAiClick({stopPropagation(){}},true);
+  if(confirm(message)) void handleAiClick(e,true);
 });
 
 btnClose.addEventListener("click",(e)=>{
@@ -845,6 +822,13 @@ function updateAiButton(){
     btnAi.title = analysisMode === "ai" ? "기본 분석으로 돌아가기" : (aiSentenceResult ? "AI 재구성 결과 보기" : "AI 재구성");
   }
   btnAi.setAttribute("aria-label", btnAi.title);
+  if(btnAiRetry){
+    btnAiRetry.disabled=aiBusy || !currentSentenceText || (inTokenView
+      ? !lastToken || !unitExplainCache.has(wordKey(lastToken))
+      : !aiSentenceResult);
+    btnAiRetry.title=inTokenView?"선택 표현 AI 설명 다시 요청":"문장 AI 재구성 다시 요청";
+    btnAiRetry.setAttribute("aria-label",btnAiRetry.title);
+  }
 }
 
 function applyAnalysisMode(mode){

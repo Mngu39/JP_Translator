@@ -78,6 +78,7 @@
   .pbtn:active{filter:brightness(1.15)}
   .pbtn:disabled{opacity:.35;cursor:default}
   .pbtn.ai-btn{font-size:17px;padding:0 11px;transition:background .15s,border-color .15s,transform .15s}
+  .pbtn.ai-retry-btn{min-width:32px;padding:0 7px;font-size:16px}
   .pbtn.ai-btn.active,.ai-text-btn.active{background:#343f67;border-color:#7f96e8}
   .pbtn.ai-btn.loading,.ai-text-btn.loading{opacity:.75;cursor:wait}
   .savebtn{height:28px;min-width:36px;padding:0 9px;border-radius:9px;background:#242936;color:#fff;border:1px solid #3a4152;font-size:14px;font-weight:800;line-height:26px;cursor:pointer;user-select:none}
@@ -88,6 +89,7 @@
   .source-controls{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:8px;flex-wrap:nowrap}
   .source-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-left:auto}
   .ai-text-btn{min-width:44px;padding-left:12px;padding-right:12px;font-size:17px;line-height:1}
+  .ai-retry-text-btn{min-width:36px;padding-left:8px;padding-right:8px;font-size:17px;line-height:1}
   .split-control{width:112px;height:28px;display:flex;flex-direction:column;justify-content:center;gap:1px;flex:0 0 auto;user-select:none}
   .split-labels{display:flex;justify-content:space-between;padding:0 3px;color:var(--muted);font-size:9px;line-height:9px}
   .split-range{width:100%;height:13px;margin:0;padding:0;accent-color:#7f96e8;cursor:pointer}
@@ -160,6 +162,7 @@
         <input id="splitModeText" class="split-range" type="range" min="0" max="2" step="1" value="2" aria-label="Sudachi 분할 모드" aria-valuetext="C" />
       </label>
       <div class="source-actions">
+        <button class="btn ai-retry-text-btn" id="btnAiTextRetry" type="button" title="AI 재구성 다시 요청" aria-label="AI 재구성 다시 요청" disabled>↻</button>
         <button class="btn ai-text-btn" id="btnAiText" type="button" title="AI 재구성" aria-label="AI 재구성" disabled>✦</button>
         <button class="btn" id="btnToggleRuby" type="button">루비 끄기</button>
       </div>
@@ -180,6 +183,7 @@
       <span id="popSub" class="popSub"></span>
     </div>
     <div class="popTopActions">
+      <button id="popAiRetry" class="pbtn ai-retry-btn" type="button" title="선택 표현 AI 설명 다시 요청" aria-label="선택 표현 AI 설명 다시 요청" disabled>↻</button>
       <button id="popAi" class="pbtn ai-btn" type="button" title="선택 표현 AI 설명" aria-label="선택 표현 AI 설명" disabled>✦</button>
       <button id="popClose" class="pbtn" type="button" title="닫기" aria-label="닫기">✕</button>
     </div>
@@ -731,6 +735,8 @@ function updateAiButtons(){
     sentenceBtn.title=active?"기본 분석으로 돌아가기":(APP.aiResult?"AI 재구성 결과 보기":"AI 재구성");
     sentenceBtn.setAttribute("aria-label",sentenceBtn.title);
   }
+  const sentenceRetry=$("#btnAiTextRetry");
+  if(sentenceRetry) sentenceRetry.disabled=APP.aiBusy||!APP.currentText||!APP.aiResult;
   const wordBtn=$("#popAi");
   if(wordBtn){
     const active=wordAiIsVisible(APP.activeToken);
@@ -739,6 +745,8 @@ function updateAiButtons(){
     wordBtn.title=active?(APP.analysisMode==="ai"?"문장 AI 분석 결과로 돌아가기":"기본 Sudachi/DeepL 결과로 돌아가기"):"선택 표현 AI 설명";
     wordBtn.setAttribute("aria-label",wordBtn.title);
   }
+  const wordRetry=$("#popAiRetry");
+  if(wordRetry) wordRetry.disabled=APP.aiBusy||!APP.activeToken||!APP.unitExplainCache.has(wordKey(APP.activeToken));
 }
 /* ===== lemma 읽기 캐시 ===== */
 const lemmaReadCache=new Map();
@@ -1182,31 +1190,6 @@ async function saveToChosen(btn){
 }
 
 
-// A deliberate long press requests a fresh AI result. Its following synthetic
-// click must not also toggle the cached result (mobile Safari and desktop).
-function bindAiLongPress(button,onHold){
-  if(!button) return;
-  let timer=null,held=false,suppress=false,origin=null;
-  const clear=()=>{if(timer!==null){clearTimeout(timer);timer=null;}};
-  button.style.touchAction="manipulation";
-  button.addEventListener("pointerdown",e=>{
-    if(e.button!==0 || button.disabled) return;
-    clear(); held=false; suppress=false; origin={x:e.clientX,y:e.clientY};
-    timer=setTimeout(()=>{
-      timer=null;held=true;suppress=true;
-      onHold();
-    },650);
-  });
-  button.addEventListener("pointermove",e=>{
-    if(origin&&Math.hypot(e.clientX-origin.x,e.clientY-origin.y)>12)clear();
-  });
-  button.addEventListener("pointerup",()=>{clear();origin=null;});
-  button.addEventListener("pointercancel",()=>{clear();origin=null;});
-  button.addEventListener("contextmenu",e=>{e.preventDefault();});
-  button.addEventListener("click",e=>{
-    if(suppress||held){e.preventDefault();e.stopImmediatePropagation();suppress=false;held=false;}
-  },true);
-}
 
 /* ===== 바인딩(중복 방지) ===== */
 (function bindOnce(){
@@ -1215,14 +1198,16 @@ function bindAiLongPress(button,onHold){
   $("#btnToggleRuby").addEventListener("click",()=>{
     APP.rubyOn=!APP.rubyOn; $("#rubyOut").classList.toggle("ruby-off",!APP.rubyOn); $("#btnToggleRuby").textContent=APP.rubyOn?"루비 끄기":"루비 켜기";
   });
-  $("#btnAiText").addEventListener("click",toggleAiAnalysis);
-  popAi.addEventListener("click",e=>{e.stopPropagation();explainActiveToken();});
-  bindAiLongPress($("#btnAiText"),()=>{
-    if(APP.aiBusy||!APP.currentText) return;
+  // click 이벤트 객체를 force 파라미터로 넘기지 않는다. ✦는 캐시 전환만 수행한다.
+  $("#btnAiText").addEventListener("click",()=>{void toggleAiAnalysis();});
+  popAi.addEventListener("click",e=>{e.stopPropagation();void explainActiveToken();});
+  $("#btnAiTextRetry").addEventListener("click",()=>{
+    if(APP.aiBusy||!APP.currentText||!APP.aiResult) return;
     if(confirm("문장 AI 재구성을 다시 요청할까요? 기존 결과는 새 요청이 성공하면 교체됩니다.")) void toggleAiAnalysis(true);
   });
-  bindAiLongPress(popAi,()=>{
-    if(APP.aiBusy||!APP.currentText||!APP.activeToken) return;
+  $("#popAiRetry").addEventListener("click",e=>{
+    e.stopPropagation();
+    if(APP.aiBusy||!APP.currentText||!APP.activeToken||!APP.unitExplainCache.has(wordKey(APP.activeToken))) return;
     if(confirm("선택 표현의 AI 설명을 다시 요청할까요?")) void explainActiveToken(true);
   });
   $("#splitModeText").addEventListener("change",()=>{const mode=SPLIT_MODES[Number($("#splitModeText").value)]||"C";setSplitMode(mode);reanalyzeForSplitMode();});
