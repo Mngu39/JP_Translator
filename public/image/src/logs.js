@@ -76,6 +76,9 @@ let sessionsCache=[];
 let selectionMode=false;
 let selectedIds=new Set();
 let currentFilter="all";
+let detailSearchIndex=new Map();
+let globalSearchTimer=null;
+let globalSearchSerial=0;
 let editState=null;
 
 function esc(s){
@@ -341,7 +344,74 @@ function sourceLinkHtml(s,label=null){
   return `<a class="source-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(label||url)}</a>`;
 }
 
+function normalizeSearchText(v){return String(v||"").normalize("NFKC").toLocaleLowerCase("ko-KR");}
+function indexDetailItems(items){
+  detailSearchIndex=new Map((items||[]).map(item=>{
+    const tokens=parseJson(item.source_furigana_json,[]);
+    const readings=Array.isArray(tokens)?tokens.flatMap(t=>[t?.surface,t?.lemma,t?.reading]):[];
+    const fields=[item.source_text,item.target_surface,item.target_word,item.target_word_lemma,
+      item.target_word_reading,item.ui_translation,item.source_translation,item.word_translation,
+      item.word_explanation,...readings];
+    return [item.id,normalizeSearchText(fields.join(" "))];
+  }));
+}
+function applyDetailFilters(){
+  const input=document.getElementById("detailSearch");
+  const q=normalizeSearchText(input?.value.trim());
+  let count=0;
+  document.querySelectorAll(".item-row").forEach(row=>{
+    const matched=(!q||detailSearchIndex.get(row.dataset.itemId)?.includes(q))&&
+      (currentFilter==="all"||row.dataset.kind===currentFilter);
+    row.hidden=!matched;
+    if(matched) count++;
+  });
+  const hint=document.getElementById("detailSearchCount");
+  if(hint) hint.textContent=q?`검색 결과 ${count}개`:"";
+  updateBulkBar();
+}
+function resultSummary(item){
+  const word=item.target_surface||item.target_word||item.source_text||"";
+  const reading=item.target_word_reading||"";
+  const meaning=item.word_translation||item.source_translation||item.ui_translation||"";
+  const title=item.session_title||item.session_key||"세션";
+  const url=`?session=${encodeURIComponent(item.session_id)}&item=${encodeURIComponent(item.id)}`;
+  return `<a class="search-result" href="${url}">
+    <div class="search-word" lang="ja">${esc(word)}${reading?` <small>(${esc(reading)})</small>`:""}</div>
+    <div class="search-meaning">${esc(meaning)}</div>
+    <div class="search-session">${esc(title)} · ${item.item_type==="kanji_box"?"단어":"문장"}</div>
+  </a>`;
+}
+async function queryAllSessions(q,serial){
+  const target=document.getElementById("globalSearchResults");
+  if(!target) return;
+  try{
+    const out=await api(`/api/items/search?q=${encodeURIComponent(q)}`);
+    if(serial!==globalSearchSerial||document.getElementById("globalSearch")?.value.trim()!==q)return;
+    const items=out.items||[];
+    target.innerHTML=items.length
+      ? `<div class="search-count">${items.length}개${out.limited?" 이상 (상위 100개 표시)":""}</div>${items.map(resultSummary).join("")}`
+      : '<div class="empty">검색 결과가 없습니다.</div>';
+  }catch(e){
+    if(serial===globalSearchSerial) target.innerHTML=`<div class="error">검색 오류: ${esc(e.message||e)}</div>`;
+  }
+}
+function bindOverviewSearch(){
+  const input=document.getElementById("globalSearch");
+  input?.addEventListener("input",()=>{
+    clearTimeout(globalSearchTimer);
+    const q=input.value.trim();
+    const serial=++globalSearchSerial;
+    const list=mainView.querySelector(".session-list");
+    const target=document.getElementById("globalSearchResults");
+    if(list)list.hidden=!!q;
+    if(target)target.hidden=!q;
+    if(!q){if(target)target.textContent="";return;}
+    if(target)target.innerHTML='<div class="loading-text">검색 중…</div>';
+    globalSearchTimer=setTimeout(()=>queryAllSessions(q,serial),140);
+  });
+}
 async function loadOverview(){
+  globalSearchSerial++;clearTimeout(globalSearchTimer);
   clearMediaUrls();
   currentSession=null;
   currentItems=[];
@@ -355,7 +425,7 @@ async function loadOverview(){
     mainView.innerHTML="<div class=empty>저장된 세션이 없습니다.</div>";
     return;
   }
-  mainView.innerHTML=`<div class="session-list">${sessionsCache.map(s=>`
+  mainView.innerHTML=`<div class="learning-search"><input id="globalSearch" type="search" autocomplete="off" placeholder="전체 세션의 단어·독음·뜻 검색" aria-label="전체 세션 검색" /></div><div id="globalSearchResults" class="search-results" hidden></div><div class="session-list">${sessionsCache.map(s=>`
     <section class="session-card" data-id="${esc(s.id)}" data-title="${esc(s.title||"")}">
       <a class="session-title" href="?session=${encodeURIComponent(s.id)}">${esc(s.title||s.session_key||s.id)}</a>
       ${sourceLinkHtml(s)}
@@ -366,9 +436,11 @@ async function loadOverview(){
         <button class="btn danger" data-session-act="delete">세션 삭제</button>
       </div>
     </section>`).join("")}</div>`;
+  bindOverviewSearch();
 }
 
 async function loadDetail(sessionId){
+  globalSearchSerial++;clearTimeout(globalSearchTimer);
   clearMediaUrls();
   selectionMode=false;
   selectedIds.clear();
@@ -378,6 +450,7 @@ async function loadDetail(sessionId){
   const out=await api(`/api/sessions/${encodeURIComponent(sessionId)}/detail?ai=1`);
   currentSession=out.session;
   currentItems=await enrichItems(out.items||[]);
+  indexDetailItems(currentItems);
   const s=currentSession;
   mainView.innerHTML=`
     <section class="detail-head">
@@ -397,18 +470,24 @@ async function loadDetail(sessionId){
       <button class="filter" data-filter="word">단어 ${Number(s.word_count||0)}</button>
       <button class="btn selection-toggle" id="selectionToggle" type="button">선택</button>
     </div>
+    <div class="learning-search"><input id="detailSearch" type="search" autocomplete="off" placeholder="이 세션의 단어·독음·뜻 검색" aria-label="현재 세션 검색" /><span id="detailSearchCount" class="search-count" aria-live="polite"></span></div>
     <section id="itemList" class="item-list">${currentItems.length?currentItems.map(itemSummary).join(""):"<div class=empty>저장된 카드가 없습니다.</div>"}</section>`;
 
   document.getElementById("exportSession")?.addEventListener("click",()=>exportApkg(s.id,s.title||"Session"));
   document.getElementById("editSession")?.addEventListener("click",()=>editSessionFlow(s));
   document.getElementById("deleteSession")?.addEventListener("click",()=>removeSession(s.id,true));
   document.getElementById("selectionToggle")?.addEventListener("click",()=>setSelectionMode(!selectionMode));
+  document.getElementById("detailSearch")?.addEventListener("input",applyDetailFilters);
+  const focusItem=new URL(location.href).searchParams.get("item");
+  if(focusItem){
+    const row=[...mainView.querySelectorAll(".item-row")].find(el=>el.dataset.itemId===focusItem);
+    if(row){row.querySelector(".item-summary")?.click();requestAnimationFrame(()=>row.scrollIntoView({block:"center"}));}
+  }
   for(const btn of document.querySelectorAll(".filter")){
     btn.addEventListener("click",()=>{
       currentFilter=btn.dataset.filter;
       document.querySelectorAll(".filter").forEach(b=>b.classList.toggle("active",b===btn));
-      document.querySelectorAll(".item-row").forEach(card=>card.hidden=currentFilter!=="all"&&card.dataset.kind!==currentFilter);
-      updateBulkBar();
+      applyDetailFilters();
     });
   }
 }

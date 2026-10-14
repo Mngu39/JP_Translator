@@ -514,19 +514,19 @@ btnGhost.addEventListener("click",(e)=>{
   setGhost(!ghostMode);
 });
 
-btnAi?.addEventListener("click", async (e)=>{
+async function handleAiClick(e,force=false){
   e.stopPropagation();
   if(pop.hidden || aiBusy || !currentSentenceText) return;
 
   // 토큰뷰의 ✦는 문장 재구성이 아니라 현재 선택 표현 하나만 설명한다.
   if(inTokenView){
     if(!lastToken) return;
-    await explainSelectedUnit(lastToken);
+    await explainSelectedUnit(lastToken,force);
     return;
   }
 
   // 문장뷰의 ✦는 전체 번역 + 학습단위 경계만 재구성한다.
-  if(aiSentenceResult){
+  if(aiSentenceResult && !force){
     applyAnalysisMode(analysisMode === "ai" ? "base" : "ai");
     return;
   }
@@ -537,9 +537,11 @@ btnAi?.addEventListener("click", async (e)=>{
   btnAi.textContent = "…";
   try{
     // 1차 AI 재구성은 원문만 사용한다. Sudachi/DeepL은 분절 판단에 전달하지 않는다.
-    const out = await restructureJa(currentSentenceText);
-    const aiRubyTokens = normalizeSentenceFurigana({tokens:out?.ruby_tokens || []}, currentSentenceText);
-    const aiUnits = normalizeAiUnits(out?.units || [], currentSentenceText);
+    const requestText=currentSentenceText, requestEpoch=sentenceEpoch;
+    const out = await restructureJa(requestText);
+    if(currentSentenceText!==requestText || sentenceEpoch!==requestEpoch) return;
+    const aiRubyTokens = normalizeSentenceFurigana({tokens:out?.ruby_tokens || []}, requestText);
+    const aiUnits = normalizeAiUnits(out?.units || [], requestText);
     if(!aiUnits.length || aiRubyTokens.length!==aiUnits.length || aiRubyTokens.some((t,i)=>t.surface!==aiUnits[i].surface || t.start!==aiUnits[i].start || t.end!==aiUnits[i].end))
       throw new Error("AI 루비와 학습 단위가 일치하지 않습니다. Sudachi 결과로 대체하지 않습니다.");
     aiSentenceResult = {
@@ -560,6 +562,39 @@ btnAi?.addEventListener("click", async (e)=>{
     btnAi.textContent = "✦";
     updateAiButton();
   }
+ }
+
+// A deliberate long press requests a fresh AI result. Its following synthetic
+// click must not also toggle the cached result (mobile Safari and desktop).
+function bindAiLongPress(button,onHold){
+  if(!button) return;
+  let timer=null,held=false,suppress=false,origin=null;
+  const clear=()=>{if(timer!==null){clearTimeout(timer);timer=null;}};
+  button.style.touchAction="manipulation";
+  button.addEventListener("pointerdown",e=>{
+    if(e.button!==0 || button.disabled) return;
+    clear(); held=false; suppress=false; origin={x:e.clientX,y:e.clientY};
+    timer=setTimeout(()=>{
+      timer=null;held=true;suppress=true;
+      onHold();
+    },650);
+  });
+  button.addEventListener("pointermove",e=>{
+    if(origin&&Math.hypot(e.clientX-origin.x,e.clientY-origin.y)>12)clear();
+  });
+  button.addEventListener("pointerup",()=>{clear();origin=null;});
+  button.addEventListener("pointercancel",()=>{clear();origin=null;});
+  button.addEventListener("contextmenu",e=>{e.preventDefault();});
+  button.addEventListener("click",e=>{
+    if(suppress||held){e.preventDefault();e.stopImmediatePropagation();suppress=false;held=false;}
+  },true);
+}
+
+btnAi?.addEventListener("click", e=>{void handleAiClick(e);});
+bindAiLongPress(btnAi,()=>{
+  if(pop.hidden||aiBusy||!currentSentenceText) return;
+  const message=inTokenView ? "선택 표현의 AI 설명을 다시 요청할까요?" : "문장 AI 재구성을 다시 요청할까요? 기존 결과는 새 요청이 성공하면 교체됩니다.";
+  if(confirm(message)) void handleAiClick({stopPropagation(){}},true);
 });
 
 btnClose.addEventListener("click",(e)=>{
@@ -727,7 +762,7 @@ function displayedWordToken(tok){
   return {...tok,reading:ai.reading||tok.reading,meaning:ai.meaning,note:ai.note,aiReadingCorrected:!!ai.reading};
 }
 
-async function explainSelectedUnit(tok){
+async function explainSelectedUnit(tok,force=false){
   if(!tok || aiBusy || !currentSentenceText) return;
   const key=wordKey(tok), mode=analysisMode;
   const refresh=()=>{
@@ -736,10 +771,10 @@ async function explainSelectedUnit(tok){
       fillTokenView(lastToken);
     updateAiButton();
   };
-  if(wordAiVisible.has(key)){
+  if(!force && wordAiVisible.has(key)){
     wordAiVisible.delete(key); refresh(); return;
   }
-  if(unitExplainCache.has(key)){
+  if(!force && unitExplainCache.has(key)){
     wordAiVisible.add(key); refresh(); return;
   }
   const requestSource=currentSentenceText, epoch=sentenceEpoch;
