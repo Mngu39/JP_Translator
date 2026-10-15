@@ -135,29 +135,23 @@ function uniq(arr){
   return Array.from(new Set(arr));
 }
 
-// ===== lemma 읽기 캐시 =====
-// 토큰 상세 화면에서는 텍스트번역기처럼 “기본형 + 기본형 요미가나”를 보여주기 위해
-// 표면형 reading을 그대로 쓰지 않고 lemma를 다시 후리가나 API에 보내 reading을 얻는다.
-const lemmaReadCache = new Map();
+// ===== 원형 독음: 표면형과 다를 때만 Sudachi에 요청 =====
+const lemmaReadCache=new Map();
 function readingFromFuriganaTokens(tokens){
   return (tokens||[]).map(t=>{
-    const surf = String(t.surface || t.text || "");
-    const read = String(t.reading || t.read || t.kana || "");
-    return read ? kataToHira(read) : surf;
+    const surface=String(t.surface||t.text||"");
+    const reading=String(t.reading||t.read||t.kana||"");
+    return reading?kataToHira(reading):surface;
   }).join("");
 }
 function getLemmaReading(lemma){
-  lemma = String(lemma||"");
+  lemma=String(lemma||"");
   if(!lemma) return Promise.resolve("");
   if(lemmaReadCache.has(lemma)) return Promise.resolve(lemmaReadCache.get(lemma));
-  return getFurigana(lemma, getSplitMode()).then(res=>{
-    const rt = readingFromFuriganaTokens(res?.tokens || res?.result || res?.morphs || res?.morphemes || []);
-    lemmaReadCache.set(lemma, rt);
-    return rt;
-  }).catch(()=>{
-    lemmaReadCache.set(lemma, "");
-    return "";
-  });
+  return getFurigana(lemma,getSplitMode()).then(res=>{
+    const reading=readingFromFuriganaTokens(res?.tokens||res?.result||res?.morphs||res?.morphemes||[]);
+    lemmaReadCache.set(lemma,reading);return reading;
+  }).catch(()=>{lemmaReadCache.set(lemma,"");return "";});
 }
 
 // ====== 사용량 카운트 =====
@@ -570,6 +564,7 @@ btnAi?.addEventListener("click",e=>{void handleAiClick(e);});
 btnAiRetry?.addEventListener("click",e=>{
   e.stopPropagation();
   if(pop.hidden||aiBusy||!currentSentenceText||btnAiRetry.disabled) return;
+  if(inTokenView ? (!lastToken || !unitExplainCache.has(wordKey(lastToken))) : !aiSentenceResult) return;
   const message=inTokenView ? "선택 표현의 AI 설명을 다시 요청할까요?" : "문장 AI 재구성을 다시 요청할까요? 기존 결과는 새 요청이 성공하면 교체됩니다.";
   if(confirm(message)) void handleAiClick(e,true);
 });
@@ -977,8 +972,9 @@ async function fillTokenView(rawTok){
 
   const lookupTerm = lemma || surface;
   const navUrl = `https://ja.dict.naver.com/#/search?range=all&query=${encodeURIComponent(lookupTerm)}`;
+  // 기본 결과는 원형을 표시하고, AI 결과는 해당 표면형을 유지한다.
   const headTerm = (isAi||tok.aiReadingCorrected) ? surface : lemma;
-  const headReading = (isAi||tok.aiReadingCorrected) ? surfaceReading : ((lemma===surface) ? surfaceReading : "");
+  const headReading = (isAi||tok.aiReadingCorrected||lemma===surface) ? surfaceReading : "";
   const aiHeadHtml = isAi && Number.isFinite(tok.start) && Number.isFinite(tok.end)
     ? baseRubyRangeHtml(tok.start,tok.end)
     : "";
@@ -990,12 +986,13 @@ async function fillTokenView(rawTok){
     <span id="subMeaning" class="meaning"></span>
   `;
 
-  if(!isAi && !tok.aiReadingCorrected && hasKanji(lemma) && lemma!==surface){
-    getLemmaReading(lemma).then(rt=>{
-      // A late Sudachi lemma lookup must not undo the user's AI reading.
-      if(viewEpoch!==tokenViewEpoch || tok.aiReadingCorrected || (lastToken!==rawTok && unitExplainKey(lastToken)!==unitExplainKey(rawTok))) return;
+  if(!isAi && !tok.aiReadingCorrected && lemma!==surface && hasKanji(lemma)){
+    getLemmaReading(lemma).then(reading=>{
+      // 비동기 응답이 새 팝업이나 AI 표시를 덮어쓰지 않도록 보호한다.
+      if(viewEpoch!==tokenViewEpoch || wordAiIsVisible(rawTok) ||
+         (lastToken!==rawTok && unitExplainKey(lastToken)!==unitExplainKey(rawTok))) return;
       const link=document.getElementById("subLemmaLink");
-      if(link && rt) link.innerHTML=`<ruby lang="ja">${escapeHtml(lemma)}<rt>${escapeHtml(rt)}</rt></ruby>`;
+      if(link && reading) link.innerHTML=`<ruby lang="ja">${escapeHtml(lemma)}<rt>${escapeHtml(reading)}</rt></ruby>`;
       scheduleReposition();
     });
   }

@@ -90,6 +90,7 @@
   .source-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-left:auto}
   .ai-text-btn{min-width:44px;padding-left:12px;padding-right:12px;font-size:17px;line-height:1}
   .ai-retry-text-btn{min-width:36px;padding-left:8px;padding-right:8px;font-size:17px;line-height:1}
+  .ai-retry-text-btn:disabled{opacity:.35;cursor:default}
   .split-control{width:112px;height:28px;display:flex;flex-direction:column;justify-content:center;gap:1px;flex:0 0 auto;user-select:none}
   .split-labels{display:flex;justify-content:space-between;padding:0 3px;color:var(--muted);font-size:9px;line-height:9px}
   .split-range{width:100%;height:13px;margin:0;padding:0;accent-color:#7f96e8;cursor:pointer}
@@ -748,20 +749,19 @@ function updateAiButtons(){
   const wordRetry=$("#popAiRetry");
   if(wordRetry) wordRetry.disabled=APP.aiBusy||!APP.activeToken||!APP.unitExplainCache.has(wordKey(APP.activeToken));
 }
-/* ===== lemma 읽기 캐시 ===== */
+/* ===== lemma 읽기 캐시: 원형과 표면형이 다를 때만 요청 ===== */
 const lemmaReadCache=new Map();
 function readingFromTokens(tokens){
-  return (tokens||[]).map(t=>{const s=String(t.surface||""); const r=String(t.reading||""); return r?kata2hira(r):s;}).join("");
+  return (tokens||[]).map(t=>{const surface=String(t.surface||"");const reading=String(t.reading||"");return reading?kata2hira(reading):surface;}).join("");
 }
 function getLemmaReading(lemma){
   if(!lemma) return Promise.resolve("");
   if(lemmaReadCache.has(lemma)) return Promise.resolve(lemmaReadCache.get(lemma));
   return callFurigana(lemma,getSplitMode()).then(res=>{
-    const rt=readingFromTokens(res.tokens||[]);
-    lemmaReadCache.set(lemma,rt); return rt;
-  }).catch(()=>{ lemmaReadCache.set(lemma,""); return ""; });
+    const reading=readingFromTokens(res.tokens||[]);
+    lemmaReadCache.set(lemma,reading);return reading;
+  }).catch(()=>{lemmaReadCache.set(lemma,"");return "";});
 }
-
 /* ===== 팝업 위치 ===== */
 function positionPopupToToken(tokEl){
   const pad = 8;
@@ -903,7 +903,8 @@ function openPopBelowToken(tokEl,payload){
   popAnchorEl=tokEl;
   APP.activeToken=payload; // Immutable source token; never replace with the overlay.
 
-  const displayTerm=(shown.ai||aiWord) ? surface : lemma;
+  // 기본 분석은 원형을 표시한다. 같은 표기라면 원문의 reading을 그대로 재사용한다.
+  const displayTerm=(shown.ai||aiWord)?surface:lemma;
   popLink.innerHTML=escapeHtml(displayTerm);
   popLink.href=buildNaverSearchUrl(lemma||surface);
   popSub.textContent=(!shown.ai&&!aiWord&&surface&&surface!==lemma)?"("+surface+")":"";
@@ -913,10 +914,12 @@ function openPopBelowToken(tokEl,payload){
     popLink.innerHTML=baseRubyRangeHtml(shown.start,shown.end) || escapeHtml(displayTerm);
   }else if((shown.ai||aiWord) && shown.reading && hasKanji(displayTerm)){
     popLink.innerHTML=`<ruby class="ja" lang="ja"><rb>${escapeHtml(displayTerm)}</rb><rt>${escapeHtml(kata2hira(shown.reading))}</rt></ruby>`;
-  }else if(hasKanji(lemma)){
-    getLemmaReading(lemma).then(rt=>{
-      if(APP.activeToken!==payload || wordAiIsVisible(payload)) return;
-      popLink.innerHTML=rt?`<ruby class="ja" lang="ja"><rb>${escapeHtml(lemma)}</rb><rt>${escapeHtml(rt)}</rt></ruby>`:escapeHtml(lemma);
+  }else if(lemma===surface && shown.reading && hasKanji(lemma)){
+    popLink.innerHTML=`<ruby class="ja" lang="ja"><rb>${escapeHtml(lemma)}</rb><rt>${escapeHtml(kata2hira(shown.reading))}</rt></ruby>`;
+  }else if(lemma!==surface && hasKanji(lemma)){
+    getLemmaReading(lemma).then(reading=>{
+      if(APP.activeToken!==payload || wordAiIsVisible(payload) || pop.style.display!=="block") return;
+      popLink.innerHTML=reading?`<ruby class="ja" lang="ja"><rb>${escapeHtml(lemma)}</rb><rt>${escapeHtml(reading)}</rt></ruby>`:escapeHtml(lemma);
       schedulePopReposition();
     });
   }
